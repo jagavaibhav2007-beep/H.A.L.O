@@ -32,6 +32,31 @@ Each layer attacks a different term of the cost. They are independent — ship i
 
 Output is always markdown text. Deterministic, offline, licence-clean (no AGPL — see Rejected).
 
+**PDF containment (2026-09-05):** all production PDF ingress uses
+`extract_worker.run_pdf`: the public `extract_text` dispatcher, registered
+`file_read`, `doc_digest`, and command artifact page verification. PDFium stays
+primary for text, with pypdf fallback; page metadata uses pypdf. The parent
+never parses an untrusted PDF. Limits are 64 MiB input, 100 extracted pages,
+1 MiB UTF-8 text, 512 MiB worker memory, and 60 seconds elapsed time (artifact
+verification uses at most 30 seconds within its operation deadline). Extraction
+of longer documents returns a page-truncation note; artifact verification refuses
+more than 100 pages. Output overflow is an explicit failure, not silent success.
+
+On Windows the process starts suspended and enters a memory-limited,
+kill-on-close Job Object before executing. Closing the job kills descendants on
+success, timeout, parser crash, stop, and parent exit. POSIX uses a new process
+group, address-space/CPU limits and parent-PID monitoring. The async wrappers
+wait for cleanup even after repeated cancellation or event-loop shutdown.
+Results use bounded JSON over stdout, with no pickle, result temporary files,
+or blocking IPC reads on the Brain event loop. This is resource containment,
+not a filesystem/network privilege sandbox. The optional frozen worker dispatch
+is `--pdf-worker <absolute-path> text|pages`; packaging must call `worker_main`
+before normal Brain/Voice startup.
+
+DOCX conversion explicitly disables Mammoth external file access. External image
+relationships are not fetched; returned text still follows the normal untrusted
+document treatment.
+
 **`file_read` becomes format-aware and paginated:**
 - Routes through `extract.py` first, then applies the cap to the *extracted* text.
 - Default cap drops **64KB → 8KB (~2k tokens)**, with new optional `offset`/`limit` args so the model pages instead of losing data. Truncation note names the remainder and how to fetch it (Claude Code's Read-tool pattern).
@@ -68,8 +93,8 @@ New Lane-1 read-only tool `doc_digest(paths | path+glob, focus?)`:
   submission. The hard cap is 64 files, enforced before extraction and spend.
 
 1. **Extract** each file via Layer 0 (per-file extract cap ~100KB). PDF parsing
-   runs in a spawned worker process with a 60-second default deadline. Stop or
-   timeout terminates, then kills if needed, and always joins/reaps the worker;
+   runs in the shared bounded subprocess with a 60-second default deadline. Stop or
+   timeout kills the owned process tree and always reaps the worker;
    a parser blocked in native code therefore cannot make Stop cosmetic.
 2. **Map:** one LIGHT call **per document**, in parallel (`asyncio.gather`, already bounded by `_LLM_SEM`). A doc over ~3k tokens is chunked and mini-reduced within the doc first. Every call is small enough that a flash-class model cannot choke — which removes the escalation trigger, not just the cost.
 3. Each map call returns a **fixed JSON digest**, not prose (schema-shaped digests beat prose — parseable, mergeable, no restating):

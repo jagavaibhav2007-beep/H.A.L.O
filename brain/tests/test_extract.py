@@ -161,7 +161,7 @@ def check_sheet_and_page_caps_bound_the_work() -> None:
         extract.PdfReader = _CountingReader
         try:
             try:
-                extract.extract_text(p2)  # blank pages -> honest "no text" error
+                extract._extract_pdf(p2)  # parser unit check; public boundary is tested separately
             except ValueError:
                 pass
         finally:

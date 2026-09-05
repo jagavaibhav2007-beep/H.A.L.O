@@ -123,16 +123,19 @@ def _uncollide(p: Path) -> Path:
 # ------------------------------------------------------------- read-only ---
 
 
-def _file_read(args: dict) -> str:
+def _file_read(args: dict, text: str | None = None) -> str:
     p = _resolve(args["path"])
     try:
-        text = extract.extract_text(p)
+        if text is None:
+            text = extract.extract_text(p)
     except (ValueError, MemoryError):
         # ValueError: honest "no extractable text"/unsupported-format/too-large
         # error -> the tool error. MemoryError: the file did not fit once, so
         # the raw-read fallback below would only try the same allocation again.
         raise
     except Exception:
+        if p.suffix.lower() == ".pdf":
+            raise  # never decode a failed/uncontained PDF as raw text
         # Extraction library choked on a malformed file -- fall back to the
         # old best-effort raw read rather than losing the file entirely.
         with p.open("rb") as handle:
@@ -169,6 +172,15 @@ def _file_read(args: dict) -> str:
         else:
             body += f"\n\n[showing lines {start + 1}-{end} of {total_lines} total in {p.name}]"
     return body
+
+
+async def _file_read_async(args: dict) -> str:
+    p = _resolve(args["path"])
+    if p.suffix.lower() == ".pdf":
+        from brain.extract_worker import extract_pdf_isolated
+        text = await extract_pdf_isolated(p)
+        return _file_read(args, text)
+    return await asyncio.to_thread(_file_read, args)
 
 
 def _clamp_limit(raw, default: int, cap: int) -> int:
@@ -708,7 +720,7 @@ _PATH = {"type": "string", "description": "Absolute path, or one starting with ~
 # the fix is to write them here, no codegen.
 
 gate.register(
-    "file_read", _file_read, tier=_path_tier("path", 1),
+    "file_read", _file_read_async, tier=_path_tier("path", 1),
     summary=lambda a: f"I want to read {a['path']}.",
     schema=_schema(
         "Read a file and return its contents as markdown/plain text (extracted "

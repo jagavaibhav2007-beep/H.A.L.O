@@ -30,6 +30,21 @@ and `voice/requirements.lock`. Install those with `python -m pip install
 with `uv pip compile pyproject.toml --universal --python-version 3.11
 --generate-hashes`.
 
+The development and verification launchers prefer the repository's
+`.venv\Scripts\python.exe` (`.venv/bin/python` on POSIX). Every candidate must
+run Python 3.11+ and import the required packages using `shared/python_probe.py`.
+Global `python`, `py -3`, and the PowerShell bundled-runtime fallback are tried
+only after the local environment. Install the locked dependencies in that
+environment before launching; a Python version check alone is insufficient.
+
+Use `-PythonCommand 'C:\path with spaces\python.exe'` and optional
+`-PythonArguments` on `dev.ps1` or `verify.ps1` to override selection. An invalid
+explicit override fails without fallback. Native source supervision also accepts
+`HALO_PYTHON` and `HALO_PYTHON_ARGUMENTS` (a JSON string array); `dev.ps1` passes
+its selected interpreter and arguments through these variables and restores the
+previous values on exit. Standalone Brain/Voice commands stay attached to the
+current terminal. Run `./shared/python_launcher_check.ps1` after launcher changes.
+
 ## Running each process
 
 ```powershell

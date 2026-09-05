@@ -8,7 +8,7 @@ use std::process::{Child, Command, Stdio};
 #[cfg(windows)]
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
@@ -175,24 +175,13 @@ fn no_window(cmd: &mut Command) {
 #[cfg(not(windows))]
 fn no_window(_cmd: &mut Command) {}
 
-/// Mirrors `_python.ps1`'s `Resolve-PythonLauncher`: try `python`, then `py -3`,
-/// each with a real *version probe* rather than a PATH-presence check. Presence
-/// is not enough — with no Python installed Windows resolves `python` to the
-/// Store alias, which spawns successfully and exits immediately, so the
-/// supervisor reports a crash loop and the diagnosis points at the wrong thing.
-///
-/// ponytail: the ps1's remaining branches (an explicit launcher override and a
-/// bundled `codex-runtimes` scan) are deliberately not mirrored — both exist for
-/// CI/agent sandboxes, where the native app never runs, and `dev.ps1` itself
-/// calls `Resolve-PythonLauncher` with no override.
-fn probe_python(cmd: &str, prefix: &[&str]) -> bool {
+/// The same dependency/import preflight as PowerShell. Do not cache failures:
+/// a resident supervisor must recover when the user repairs the environment.
+fn probe_python(root: &std::path::Path, cmd: &str, prefix: &[String]) -> bool {
     let mut probe = Command::new(cmd);
     probe
         .args(prefix)
-        .args([
-            "-c",
-            "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)",
-        ])
+        .arg(root.join("shared").join("python_probe.py"))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -200,13 +189,23 @@ fn probe_python(cmd: &str, prefix: &[&str]) -> bool {
     matches!(probe.status(), Ok(status) if status.success())
 }
 
-fn python_launcher() -> Option<(&'static str, &'static [&'static str])> {
-    static LAUNCHER: OnceLock<Option<(&'static str, &'static [&'static str])>> = OnceLock::new();
-    *LAUNCHER.get_or_init(|| {
-        [("python", &[][..]), ("py", &["-3"][..])]
-            .into_iter()
-            .find(|(cmd, prefix)| probe_python(cmd, prefix))
-    })
+fn python_launcher(root: &std::path::Path) -> Result<(String, Vec<String>), String> {
+    if let Ok(command) = std::env::var("HALO_PYTHON") {
+        if !command.is_empty() {
+            let args: Vec<String> = serde_json::from_str(
+                &std::env::var("HALO_PYTHON_ARGUMENTS").unwrap_or_else(|_| "[]".into()),
+            ).map_err(|e| format!("HALO_PYTHON_ARGUMENTS must be a JSON string array: {e}"))?;
+            return if probe_python(root, &command, &args) { Ok((command, args)) } else {
+                Err("HALO_PYTHON override cannot load required packages or Python 3.11+; run shared/python_probe.py with that interpreter and install locked dependencies (DEVELOPMENT.md). No fallback attempted.".into())
+            };
+        }
+    }
+    let local = if cfg!(windows) { ".venv/Scripts/python.exe" } else { ".venv/bin/python" };
+    [(root.join(local).to_string_lossy().into_owned(), vec![]),
+     ("python".into(), vec![]), ("py".into(), vec!["-3".into()])]
+        .into_iter()
+        .find(|(cmd, prefix)| probe_python(root, cmd, prefix))
+        .ok_or_else(|| "No Python 3.11+ with required Halo packages found. Create .venv and install locked dependencies (DEVELOPMENT.md), or set HALO_PYTHON to a prepared interpreter.".into())
 }
 
 /// Repo root, resolved at *runtime* by walking up from the running executable
@@ -238,12 +237,10 @@ fn repo_root() -> Option<PathBuf> {
 /// exists. `_app` stays in the signature so `supervise`'s `mk_cmd` pointer type
 /// is untouched.
 fn sidecar_cmd(_app: &AppHandle, module: &'static str) -> Result<Command, String> {
-    let (launcher, prefix) = python_launcher().ok_or_else(|| {
-        format!("Python 3.11+ not found (tried `python` and `py -3`); cannot start {module}")
-    })?;
     let root = repo_root().ok_or_else(|| {
         format!("could not locate the Halo source tree from {:?}", std::env::current_exe())
     })?;
+    let (launcher, prefix) = python_launcher(&root)?;
     let mut cmd = Command::new(launcher);
     cmd.args(prefix).args(["-m", module]).current_dir(root.join(module));
     // Child stdout/stderr go to a file, not the parent's console: in a release

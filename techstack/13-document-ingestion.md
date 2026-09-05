@@ -24,4 +24,15 @@ Companion to [systemdesign/13-document-ingestion.md](../systemdesign/13-document
 
 ## Install weight
 
+PDF fallback is pinned to pypdf 6.16.2 in the hashed Brain lock (minimum
+`>=6.16.2,<7`). Its [upstream changelog](https://pypdf.readthedocs.io/en/6.16.2/meta/CHANGELOG.html)
+includes the 6.15.0 parser-complexity fixes and 6.16.1 XForm/outline iteration
+bounds. The previous 6.14.2 pin is affected by
+[GHSA-fc8x-2rww-xw9m](https://github.com/py-pdf/pypdf/security/advisories/GHSA-fc8x-2rww-xw9m).
+Parser updates complement the shared subprocess resource limits; they do not
+replace them. PDFium 5.12.1 is unchanged in this patch.
+
+Mammoth external access remains explicitly off, matching its
+[security guidance](https://github.com/mwilliamson/python-mammoth#security).
+
 New deps: `mammoth` + `openpyxl` + `markdownify` — pure Python, a few MB total, no native builds, no model downloads. Everything else is already in the environment.

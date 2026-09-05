@@ -621,11 +621,11 @@ async def check_lease_boundaries_and_verification_limit() -> None:
     verify_entered, verify_release = threading.Event(), threading.Event()
     original_verify = commanding._verify_artifact
 
-    def blocked_verify(item, *args):
+    def blocked_verify(item, *args, **kwargs):
         if item.path == verify_target and not verify_entered.is_set():
             verify_entered.set()
             verify_release.wait(5)
-        return original_verify(item, *args)
+        return original_verify(item, *args, **kwargs)
 
     commanding._verify_artifact = blocked_verify
     first_verify = asyncio.create_task(
