@@ -27,6 +27,8 @@ _POLL_SECONDS = .025
 
 def run_pdf(path: Path, *, mode="text", timeout=60.0, cancelled=None):
     """Synchronous bounded API. Async callers use run_cancellable below."""
+    from brain.capabilities import require_document_modules
+    require_document_modules("pdf")
     from brain.commanding import _ProcessJob, _resume_process
     from brain.task_runtime import TaskStopped
 

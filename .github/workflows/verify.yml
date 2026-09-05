@@ -16,9 +16,7 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: |
-            brain/requirements.lock
-            voice/requirements.lock
+          cache-dependency-path: uv.lock
       - uses: actions/setup-node@v6
         with:
           node-version: "22"
@@ -29,14 +27,16 @@ jobs:
       - name: Install locked Python dependencies
         shell: pwsh
         run: |
-          python -m pip install --require-hashes -r brain/requirements.lock
-          python -m pip install --require-hashes -r voice/requirements.lock
-          python -m pip check
+          python -m pip install uv==0.11.3
+          uv sync --locked --extra full --python 3.12
+          uv pip check
       - name: Install locked UI dependencies
         working-directory: ui
         run: npm ci
       - name: Run the full Phase 0-2 gate
         shell: pwsh
+        env:
+          HF_HUB_OFFLINE: "1"
         run: ./dev.ps1 -Verify
 
       - name: Audit npm dependencies
@@ -46,5 +46,5 @@ jobs:
         shell: pwsh
         run: |
           python -m pip install pip-audit
-          pip-audit --vulnerability-service osv -r brain/requirements.lock --disable-pip --no-deps
-          pip-audit --vulnerability-service osv -r voice/requirements.lock --disable-pip --no-deps
+          uv export --locked --extra full --no-emit-project --output-file requirements.txt --quiet
+          pip-audit --vulnerability-service osv -r requirements.txt --disable-pip --no-deps

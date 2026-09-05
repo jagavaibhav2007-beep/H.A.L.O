@@ -24,11 +24,23 @@ Brain uses an OS-level lock to prevent multiple instances from competing for `se
 - **Rust + cargo** (for `ui/src-tauri` — the native Tauri shell). Without this, use `./dev.ps1 -Browser` for a functional browser workspace. Plain `npm run dev` remains UI-only.
 - Python 3.11+ (for `brain/` and `voice/`)
 
-Python dependency graphs are pinned with hashes in `brain/requirements.lock`
-and `voice/requirements.lock`. Install those with `python -m pip install
---require-hashes -r requirements.lock` from each worker directory. Regenerate
-with `uv pip compile pyproject.toml --universal --python-version 3.11
---generate-hashes`.
+One root distribution, `halo-local-assistant`, installs both Brain and Voice.
+`uv.lock` is the single universal, hashed production dependency graph. From
+the repository root, run `uv sync --locked --extra full` for desktop development,
+or `uv sync --locked --extra core` for lightweight headless development.
+
+Base/core supports chat, permissions, durable tasks and plain text.
+`documents` adds PDF/DOCX/XLSX/HTML extraction; `semantic` adds vector storage
+and embedding dependencies; `full` includes both. Parsers load only when needed.
+`halo diagnostics` reports installed capabilities without downloading a model.
+Installed semantic dependencies do not imply a ready embedding model.
+Official desktop builds must validate the full profile.
+
+For pip consumers, export the selected profile with
+`uv export --locked --extra full --no-emit-project --output-file requirements.txt`,
+then `python -m pip install --require-hashes -r requirements.txt` and
+`python -m pip install --no-deps -e .`. The export is derived, not another lock.
+Regenerate with `uv lock` and review dependency changes.
 
 The development and verification launchers prefer the repository's
 `.venv\Scripts\python.exe` (`.venv/bin/python` on POSIX). Every candidate must
@@ -54,10 +66,10 @@ cd ui; npm install; npm run tauri dev
 ./dev.ps1 -Browser
 
 # Brain (starts the authenticated WebSocket server)
-cd brain; python -m brain
+.\.venv\Scripts\halo.exe brain
 
 # Voice (connects, authenticates, and idles)
-cd voice; python -m voice
+.\.venv\Scripts\halo.exe voice
 ```
 
 ## Running all three together
@@ -84,7 +96,9 @@ python shared/check_contract_sync.py
 
 This fails if the TS and Python type sets (message names + required fields) don't match the schema. Run it whenever either side's contract file changes.
 
-`voice/` imports the same contract module from `brain` (`brain.ipc.contract`), so install Brain into Voice's environment with `pip install -e ../brain`.
+`voice` imports `brain.ipc.contract` from the same installed distribution and
+environment. No cross-install is needed. `python -m brain` and `python -m voice`
+remain supported with that environment, from the root or worker directories.
 
 Self-checks (round-trip a `user_msg`, confirm unknown/malformed frames are rejected):
 
@@ -104,7 +118,7 @@ python shared/smoke_test.py
 ./dev.ps1 -Smoke
 ```
 
-Prints a `PASS`/`FAIL` line per criterion plus a summary, and exits non-zero if any criterion fails (so CI can gate on it later). Requires `brain` importable, and for the Voice criterion, `voice` with `pip install -e ../brain` done in voice's environment (same prerequisite as `voice/tests/test_client.py`).
+Prints a `PASS`/`FAIL` line per criterion plus a summary, and exits non-zero if any criterion fails. Requires the shared root distribution installed in the selected environment.
 
 **Scope boundary:** this test drives the WS-protocol contract with real in-process Brain servers (ephemeral ports, no packaged binaries). It does **not** drive the Tauri GUI or the actual OS-process supervision (spawn/kill/respawn) — a native WebView2 window and Rust process supervision can't be headlessly driven here. Those are covered separately:
 - the backoff ladder (1s/5s/30s, then 30s repeatedly) is unit-tested in `ui/src-tauri/src/supervisor.rs` (`cargo test`, run from `ui/src-tauri`).

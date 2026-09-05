@@ -4,7 +4,6 @@ import sys
 
 CORE_MODULES = (
     "websockets", "httpx", "keyring", "langgraph", "langgraph.checkpoint.sqlite", "aiosqlite",
-    "sqlite_vec", "fastembed", "pypdfium2", "pypdf", "mammoth", "openpyxl", "markdownify",
 )
 
 

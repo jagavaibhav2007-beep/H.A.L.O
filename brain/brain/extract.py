@@ -13,11 +13,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import mammoth
-import openpyxl
-import pypdfium2 as pdfium
-from markdownify import markdownify
-from pypdf import PdfReader
+from brain.capabilities import require
 from brain.extract_worker import PDF_OUTPUT_BYTES, PDF_PAGE_CAP
 
 # ponytail: per-sheet row cap keeps a whole workbook cheap to page through the
@@ -43,6 +39,8 @@ class _OutputLimit(ValueError):
 
 def _extract_pdf(path: Path) -> str:
     """Worker-only parser. Call extract_text for the contained public API."""
+    pdfium = require("pypdfium2")
+    PdfReader = require("pypdf").PdfReader
     text = ""
     total = 0
     try:
@@ -106,6 +104,7 @@ def _extract_pdf(path: Path) -> str:
 
 def _pdf_pages(path: Path) -> int:
     """Worker-only artifact metadata; never extracts images or remote links."""
+    PdfReader = require("pypdf").PdfReader
     reader = PdfReader(str(path))
     if reader.is_encrypted:
         raise ValueError("encrypted/password-protected PDF cannot be verified")
@@ -116,6 +115,8 @@ def _pdf_pages(path: Path) -> int:
 
 
 def _extract_docx(path: Path) -> str:
+    mammoth = require("mammoth")
+    markdownify = require("markdownify").markdownify
     # mammoth's own Markdown writer is deprecated upstream ("generating HTML and
     # using a separate library to convert the HTML to Markdown is recommended");
     # markdownify is already the .html path's converter, so reuse it.
@@ -131,6 +132,7 @@ def _fmt_row(cells: tuple, width: int) -> str:
 
 
 def _extract_xlsx(path: Path) -> str:
+    openpyxl = require("openpyxl")
     wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
     try:
         sections = []
@@ -164,6 +166,7 @@ def _extract_xlsx(path: Path) -> str:
 
 
 def _extract_html(path: Path) -> str:
+    markdownify = require("markdownify").markdownify
     html = path.read_text(encoding="utf-8", errors="replace")
     return markdownify(html)
 

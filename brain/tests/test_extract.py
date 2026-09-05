@@ -149,7 +149,8 @@ def check_sheet_and_page_caps_bound_the_work() -> None:
         with p2.open("wb") as handle:
             w.write(handle)
         pages_read: list[int] = []
-        real_reader = extract.PdfReader
+        import pypdf
+        real_reader = pypdf.PdfReader
 
         class _CountingReader(real_reader):  # type: ignore[misc,valid-type]
             @property
@@ -158,14 +159,14 @@ def check_sheet_and_page_caps_bound_the_work() -> None:
                 pages_read.append(len(got))
                 return got
 
-        extract.PdfReader = _CountingReader
+        pypdf.PdfReader = _CountingReader
         try:
             try:
                 extract._extract_pdf(p2)  # parser unit check; public boundary is tested separately
             except ValueError:
                 pass
         finally:
-            extract.PdfReader = real_reader
+            pypdf.PdfReader = real_reader
         # The point: the fallback asked for len(pages) but only ever indexed
         # within the cap -- it never iterated all three.
         assert pages_read and pages_read[0] == 3, pages_read

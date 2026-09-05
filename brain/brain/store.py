@@ -20,7 +20,10 @@ from threading import RLock
 from datetime import datetime, timezone
 from pathlib import Path
 
-import sqlite_vec  # hard dep -- hoisted so it isn't re-imported inside three hot functions
+try:
+    import sqlite_vec
+except (ImportError, OSError):
+    sqlite_vec = None
 
 logger = logging.getLogger(__name__)
 
@@ -70,9 +73,10 @@ def connect(db_path: Path | None = None) -> sqlite3.Connection:
 
     extension_loaded = False
     try:
+        if sqlite_vec is None:
+            raise ImportError("semantic capability is not installed")
         conn.enable_load_extension(True)
         sqlite_vec.load(conn)
-        conn.enable_load_extension(False)
         extension_loaded = True
     except Exception as exc:
         logger.warning(
@@ -80,6 +84,12 @@ def connect(db_path: Path | None = None) -> sqlite3.Connection:
             type(exc).__name__,
         )
         _vec_ok = False
+    finally:
+        # Never leave arbitrary extension loading enabled after a failed load.
+        try:
+            conn.enable_load_extension(False)
+        except AttributeError:
+            pass
 
     _run_migrations(conn)
     if extension_loaded:

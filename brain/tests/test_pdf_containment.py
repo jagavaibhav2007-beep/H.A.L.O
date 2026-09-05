@@ -16,6 +16,8 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from pypdf import PdfWriter
+import pypdf
+import pypdfium2
 from pypdf.generic import DictionaryObject, NameObject, DecodedStreamObject
 from brain import extract, extract_worker, gate, commanding
 from brain.tools import files
@@ -42,7 +44,7 @@ def text_pdf(path: Path, pages: int = 1, text: str = "Hello PDF", encrypted=Fals
 def check_public_entry_isolated(root):
     path = root / "normal.pdf"
     text_pdf(path)
-    with patch.object(extract.pdfium, "PdfDocument", side_effect=ValueError("parent parser reached")), patch.object(extract, "PdfReader", side_effect=ValueError("parent parser reached")):
+    with patch.object(pypdfium2, "PdfDocument", side_effect=ValueError("parent parser reached")), patch.object(pypdf, "PdfReader", side_effect=ValueError("parent parser reached")):
         assert "Hello PDF" in extract.extract_text(path)
         assert "Hello PDF" in files._file_read({"path": str(path)})
     print("[pdf] public extraction and direct file_read never parse in the parent: OK")
@@ -104,7 +106,7 @@ def check_real_pdf_edges(root):
 def check_fallback_and_external_docx(root):
     pdf = root / 'fallback.pdf'
     text_pdf(pdf)
-    with patch.object(extract.pdfium, 'PdfDocument', side_effect=ValueError('PDFium rejected fixture')):
+    with patch.object(pypdfium2, 'PdfDocument', side_effect=ValueError('PDFium rejected fixture')):
         assert 'Hello PDF' in extract._extract_pdf(pdf)
     docx = root / 'external.docx'
     parts = {

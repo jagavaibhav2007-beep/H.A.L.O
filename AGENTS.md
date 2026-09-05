@@ -70,7 +70,7 @@ The focused protocol checks are also runnable directly: `python shared/smoke_tes
 
 **Voice (`voice/`, Python 3.11+):**
 ```powershell
-pip install -e ../brain      # from voice/'s env - voice imports brain.ipc.contract
+uv sync --locked --extra full # from repo root; one environment contains Brain and Voice
 python -m voice
 python voice/tests/test_client.py
 ```

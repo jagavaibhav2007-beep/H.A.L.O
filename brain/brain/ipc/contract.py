@@ -5,8 +5,8 @@ fields). Hand-mirrored by ui/src/ipc/contract.ts — keep both in sync; run
 `python shared/check_contract_sync.py` after editing either (it diffs the two
 CONTRACT_SPECs directly). Full contract prose: systemdesign/11-ipc-contract.md
 
-Importable by both `brain` and `voice` (voice installs brain in dev via
-`pip install -e ../brain`; see DEVELOPMENT.md).
+Importable by both `brain` and `voice` from the shared root distribution
+(see DEVELOPMENT.md).
 """
 
 from __future__ import annotations
