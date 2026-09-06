@@ -9,13 +9,17 @@ import argparse
 import asyncio
 import json
 import os
+import shutil
+import sys
 from pathlib import Path
 import subprocess
 import tempfile
 import time
 import uuid
+from unittest.mock import patch
 
 from websockets.asyncio.client import connect
+from brain.commanding import _ProcessJob, _resume_process
 
 
 class ProfileDirectory(tempfile.TemporaryDirectory):
@@ -56,52 +60,123 @@ async def authenticate(session):
         }))
         frame = json.loads(await asyncio.wait_for(ws.recv(), 5))
         assert frame["type"] == "hello_ack", frame
+        # Allow the initial snapshot to finish instead of closing midway.
+        while frame["type"] != "snapshot_complete":
+            frame = json.loads(await asyncio.wait_for(ws.recv(), 10))
+
+
+def check_frozen_workers(executable, root, env):
+    from pypdf import PdfWriter
+    from pypdf.generic import DictionaryObject, NameObject, DecodedStreamObject
+    from brain.extract_worker import run_pdf, extract_pdf_isolated
+    writer = PdfWriter()
+    page = writer.add_blank_page(width=200, height=200)
+    font = writer._add_object(DictionaryObject({
+        NameObject("/Type"): NameObject("/Font"),
+        NameObject("/Subtype"): NameObject("/Type1"),
+        NameObject("/BaseFont"): NameObject("/Helvetica"),
+    }))
+    page[NameObject("/Resources")] = DictionaryObject({
+        NameObject("/Font"): DictionaryObject({NameObject("/F1"): font}),
+    })
+    content = DecodedStreamObject()
+    content.set_data(b"BT /F1 12 Tf 10 100 Td (Frozen PDF works) Tj ET")
+    page[NameObject("/Contents")] = writer._add_object(content)
+    path = root / "worker fixture.pdf"
+    writer.write(path)
+    async def cancel_worker():
+        with patch.dict(os.environ, {"HALO_EXTRACT_STUB_DELAY": "30"}):
+            task = asyncio.create_task(extract_pdf_isolated(path))
+            await asyncio.sleep(.25)
+            start = time.monotonic()
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            else:
+                raise AssertionError("frozen PDF worker ignored cancellation")
+            assert time.monotonic() - start < 2
+    # Exercise the production worker boundary with the copied frozen runtime.
+    with patch.object(sys, "frozen", True, create=True), patch.object(sys, "executable", str(executable)), patch.dict(os.environ, {"TEMP": str(root), "TMP": str(root)}):
+        assert "Frozen PDF works" in run_pdf(path)
+        assert run_pdf(path, mode="pages") == 1
+        asyncio.run(cancel_worker())
+    result = subprocess.run(
+        [str(executable), "--external-command", str(Path(os.environ["SystemRoot"]) / "System32" / "cmd.exe"),
+         "/d", "/c", "echo external-helper&exit /b 7"],
+        cwd=root, env=env, capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 7 and "external-helper" in result.stdout, (result.returncode, result.stdout, result.stderr)
+    print("[frozen] PDF text/pages, cancellation and external-command output/exit status PASS", flush=True)
 
 
 def main():
+    sys.stdout.reconfigure(errors="backslashreplace")
     parser = argparse.ArgumentParser()
-    parser.add_argument("--python", required=True, type=Path)
+    runtime = parser.add_mutually_exclusive_group(required=True)
+    runtime.add_argument("--python", type=Path)
+    runtime.add_argument("--executable", type=Path)
     parser.add_argument("--profile", required=True, choices=("core", "full"))
     args = parser.parse_args()
-    python = str(args.python.resolve())
+    python = str(args.python.resolve()) if args.python else None
     with ProfileDirectory(prefix="Halo profile café ") as folder:
         root = Path(folder)
         env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "PYTHONHOME")}
-        env.update(LOCALAPPDATA=folder, HF_HUB_OFFLINE="1", HALO_LLM_STUB="1", HALO_EXTRACT_STUB="1")
-        command = [python, "-I", "-m", "halo"]
+        env.update(LOCALAPPDATA=folder, TEMP=folder, TMP=folder, HF_HUB_OFFLINE="1", HALO_LLM_STUB="1", HALO_EXTRACT_STUB="1")
+        if args.executable:
+            executable = root / "Halo backend café.exe"
+            shutil.copy2(args.executable.resolve(), executable)
+            command = [str(executable)]
+            env["PATH"] = str(Path(os.environ["SystemRoot"]) / "System32")
+        else:
+            command = [python, "-I", "-m", "halo"]
         report = subprocess.run(command + ["diagnostics"], cwd=root, env=env, capture_output=True, text=True, check=True, timeout=30)
         caps = json.loads(report.stdout)
         expected = args.profile == "full"
         assert all(value == expected for value in caps["documents"].values()), caps
         assert caps["semantic_dependencies"] == expected, caps
+        if args.executable:
+            check_frozen_workers(executable, root, env)
         for mode in ("brain", "voice"):
             subprocess.run(command + [mode, "--help"], cwd=root, env=env, capture_output=True, check=True, timeout=10)
         # -m compatibility must resolve the installed packages, not this tree.
-        subprocess.run([python, "-I", "-c", "import brain.server, voice.__main__"], cwd=root, env=env, check=True, timeout=20)
+        if python:
+            subprocess.run([python, "-I", "-c", "import brain.server, voice.__main__"], cwd=root, env=env, check=True, timeout=20)
         processes = []
+        jobs = {}
         with (root / "brain.log").open("w", encoding="utf-8") as brain_log, (root / "voice.log").open("w", encoding="utf-8") as voice_log:
-            def brain():
-                child = subprocess.Popen(command + ["brain"], cwd=root, env=env, stdout=brain_log, stderr=brain_log)
+            def spawn(mode, log):
+                child = subprocess.Popen(
+                    command + [mode], cwd=root, env=env, stdout=log, stderr=log,
+                    creationflags=(0x08000000 | 0x00000004) if os.name == "nt" else 0,
+                )
                 processes.append(child)
+                jobs[child.pid] = _ProcessJob(child.pid)
+                _resume_process(child.pid)
                 return child
+            def brain():
+                return spawn("brain", brain_log)
             try:
                 first = brain()
                 session_path = root / "Halo" / "session.json"
                 session = wait_session(session_path, first)
                 asyncio.run(authenticate(session))
-                voice = subprocess.Popen(command + ["voice"], cwd=root, env=env, stdout=voice_log, stderr=voice_log)
-                processes.append(voice)
+                voice = spawn("voice", voice_log)
                 def wait_voice(count):
-                    deadline = time.monotonic() + 15
+                    # A cold one-file restart can miss two connection attempts,
+                    # reaching the existing 30-second reconnect rung.
+                    deadline = time.monotonic() + 45
                     while time.monotonic() < deadline:
                         assert voice.poll() is None, "Voice exited"
-                        if (root / "voice.log").read_text(encoding="utf-8").count("authentication acknowledged") >= count:
+                        if (root / "voice.log").read_text(encoding="utf-8", errors="replace").count("authentication acknowledged") >= count:
                             return
                         time.sleep(.05)
                     raise AssertionError(f"Voice did not authenticate {count} time(s)")
                 wait_voice(1)
                 first.kill()
                 first.wait(timeout=5)
+                jobs[first.pid].close()  # generation exit must reap interpreter descendants
                 second = brain()
                 fresh = wait_session(session_path, second, session["token"])
                 asyncio.run(authenticate(fresh))
@@ -109,11 +184,13 @@ def main():
             except BaseException:
                 brain_log.flush()
                 voice_log.flush()
-                print((root / "brain.log").read_text(encoding="utf-8"))
-                print((root / "voice.log").read_text(encoding="utf-8"))
+                print((root / "brain.log").read_text(encoding="utf-8", errors="replace"))
+                print((root / "voice.log").read_text(encoding="utf-8", errors="replace"))
                 raise
             finally:
                 for process in reversed(processes):
+                    if process.pid in jobs:
+                        jobs[process.pid].close()
                     if process.poll() is None:
                         process.kill()
                     process.wait(timeout=5)

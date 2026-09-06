@@ -230,19 +230,34 @@ fn repo_root() -> Option<PathBuf> {
     None
 }
 
-/// ponytail: runs each sidecar from source (`python -m brain` / `python -m
-/// voice`). Packaging — a PyInstaller step producing a bundled
-/// `resources/sidecars/halo-<module>.exe` plus the branch that would prefer it —
-/// is a Phase-3 concern and isn't written yet; add it back here when that step
-/// exists. `_app` stays in the signature so `supervise`'s `mk_cmd` pointer type
-/// is untouched.
+fn packaged_command(directory: &std::path::Path, module: &'static str) -> Result<Command, String> {
+    let filename = if cfg!(windows) { "halo-backend.exe" } else { "halo-backend" };
+    let executable = directory.join(filename);
+    if !executable.is_file() {
+        return Err("Bundled Halo backend is missing; reinstall the desktop application. No Python fallback attempted.".into());
+    }
+    let mut command = Command::new(executable);
+    command.arg(module).current_dir(directory);
+    Ok(command)
+}
+
+/// Release builds only launch the adjacent externalBin. Source discovery and
+/// interpreter overrides belong to debug builds, never installed applications.
 fn sidecar_cmd(_app: &AppHandle, module: &'static str) -> Result<Command, String> {
-    let root = repo_root().ok_or_else(|| {
-        format!("could not locate the Halo source tree from {:?}", std::env::current_exe())
-    })?;
-    let (launcher, prefix) = python_launcher(&root)?;
-    let mut cmd = Command::new(launcher);
-    cmd.args(prefix).args(["-m", module]).current_dir(root.join(module));
+    let mut cmd = if cfg!(debug_assertions)
+        && std::env::var("HALO_USE_BUNDLED_BACKEND").as_deref() != Ok("1")
+    {
+        let root = repo_root().ok_or_else(|| "Could not locate the Halo source tree".to_string())?;
+        let (launcher, prefix) = python_launcher(&root)?;
+        let mut command = Command::new(launcher);
+        command.args(prefix).args(["-m", module]).current_dir(root.join(module));
+        command
+    } else {
+        let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+        let directory = executable.parent().ok_or("Application directory unavailable")?;
+        packaged_command(directory, module)?
+    };
+    cmd.stdin(Stdio::null());
     // Child stdout/stderr go to a file, not the parent's console: in a release
     // build there is no console to inherit, so this is the only place a sidecar
     // traceback can be read from.
@@ -270,6 +285,34 @@ fn brain_cmd(app: &AppHandle) -> Result<Command, String> {
 
 fn voice_cmd(app: &AppHandle) -> Result<Command, String> {
     sidecar_cmd(app, "voice")
+}
+
+// Suspend before assigning Job Objects so a one-file bootloader cannot spawn
+// an unowned interpreter in the small window between spawn and assignment.
+fn spawn_suspended(cmd: &mut Command) -> std::io::Result<Child> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000 | 0x0000_0004); // NO_WINDOW | SUSPENDED
+    }
+    cmd.spawn()
+}
+
+fn resume_owned(child: &Child) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        #[link(name = "ntdll")]
+        extern "system" {
+            fn NtResumeProcess(handle: HANDLE) -> i32;
+        }
+        let status = unsafe { NtResumeProcess(HANDLE(child.as_raw_handle())) };
+        if status < 0 {
+            return Err(format!("Could not resume owned sidecar: NTSTATUS {status:#x}"));
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = child;
+    Ok(())
 }
 
 /// One rung of the ladder: sleeps and returns true to retry, or emits the
@@ -326,8 +369,20 @@ fn supervise(
                 return;
             }
             emit_state(&app, &statuses, name, "starting");
+            // A generation job also reaps a bootloader's descendants after its
+            // unexpected exit, before another Brain can contend for its lock.
+            let generation_job = match ProcessJob::new() {
+                Ok(job) => job,
+                Err(error) => {
+                    log(&format!("halo: {error}"));
+                    if backoff_or_error(&app, &statuses, name, &mut attempt) {
+                        continue;
+                    }
+                    return;
+                }
+            };
             let spawned = mk_cmd(&app)
-                .and_then(|mut cmd| cmd.spawn().map_err(|e| format!("failed to spawn {name}: {e}")));
+                .and_then(|mut cmd| spawn_suspended(&mut cmd).map_err(|e| format!("failed to spawn {name}: {e}")));
             let mut child = match spawned {
                 Ok(c) => c,
                 Err(e) => {
@@ -338,7 +393,10 @@ fn supervise(
                     return;
                 }
             };
-            if let Err(error) = process_job.assign(&child) {
+            if let Err(error) = process_job.assign(&child)
+                .and_then(|_| generation_job.assign(&child))
+                .and_then(|_| resume_owned(&child))
+            {
                 log(&format!("halo: {error}"));
                 match child.kill() {
                     Ok(()) => {
@@ -396,6 +454,7 @@ fn supervise(
                 thread::sleep(Duration::from_millis(200));
             }
 
+            drop(generation_job); // reap descendants before the restart backoff
             attempt = attempt_after_exit(attempt, start.elapsed());
             if !backoff_or_error(&app, &statuses, name, &mut attempt) {
                 return;
@@ -467,6 +526,53 @@ impl Sidecars {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn packaged_command_is_explicit_and_never_falls_back_to_python() {
+        let dir = std::env::temp_dir().join(format!("Halo packaged café {}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let filename = if cfg!(windows) { "halo-backend.exe" } else { "halo-backend" };
+        let executable = dir.join(filename);
+        std::fs::write(&executable, b"test fixture, not executed").unwrap();
+        let command = packaged_command(&dir, "voice").unwrap();
+        assert_eq!(command.get_program(), executable.as_os_str());
+        assert_eq!(command.get_args().collect::<Vec<_>>(), vec![std::ffi::OsStr::new("voice")]);
+        std::fs::remove_file(&executable).unwrap();
+        assert!(packaged_command(&dir, "brain").unwrap_err().contains("reinstall"));
+        std::fs::remove_dir(&dir).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn suspended_child_runs_only_after_nested_job_ownership() {
+        const FLAG: &str = "HALO_SUSPENDED_TEST_MARKER";
+        if let Some(marker) = std::env::var_os(FLAG) {
+            std::fs::write(marker, b"running").unwrap();
+            thread::sleep(Duration::from_secs(30));
+            return;
+        }
+        let marker = std::env::temp_dir().join(format!("halo-suspend-{}.marker", std::process::id()));
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command.args(["--exact", "supervisor::tests::suspended_child_runs_only_after_nested_job_ownership"])
+            .env(FLAG, &marker);
+        let mut child = spawn_suspended(&mut command).unwrap();
+        let lifetime = ProcessJob::new().unwrap();
+        let generation = ProcessJob::new().unwrap();
+        lifetime.assign(&child).unwrap();
+        generation.assign(&child).unwrap();
+        thread::sleep(Duration::from_millis(100));
+        assert!(!marker.exists(), "child ran before resume");
+        resume_owned(&child).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !marker.exists() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(25));
+        }
+        let started = marker.exists();
+        drop(generation);
+        child.wait().unwrap();
+        assert!(started, "owned child did not resume");
+        std::fs::remove_file(marker).unwrap();
+    }
 
     #[test]
     fn backoff_ladder_is_1s_5s_then_repeats_30s() {

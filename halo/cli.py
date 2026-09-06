@@ -10,6 +10,9 @@ import sys
 def main() -> None:
     multiprocessing.freeze_support()
     mode = sys.argv[1] if len(sys.argv) > 1 else None
+    if mode == "--external-command":
+        from halo.freezing import run_external
+        raise SystemExit(run_external(sys.argv[2:]))
     if mode == "--pdf-worker":
         from brain.extract_worker import worker_main
         sys.argv.pop(1)

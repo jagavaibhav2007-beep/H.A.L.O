@@ -746,6 +746,8 @@ async def _run_managed(spec: CommandSpec, decision: Decision, ctx) -> dict:
         if time.monotonic() >= deadline:
             raise VerificationLimit()
         recheck_identity(spec)
+        from halo.freezing import external_argv
+        argv = external_argv(argv, env)
         flags = (subprocess.CREATE_NEW_PROCESS_GROUP | 0x4) if os.name == "nt" else 0  # CREATE_SUSPENDED
         proc = await asyncio.create_subprocess_exec(*argv, cwd=spec.cwd, env=env,
                                                     stdin=asyncio.subprocess.DEVNULL,

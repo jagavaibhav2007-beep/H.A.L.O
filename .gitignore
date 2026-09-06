@@ -41,6 +41,7 @@ pnpm-debug.log*
 
 # Rust / Tauri
 target/
+/ui/src-tauri/binaries/*.exe
 *.rs.bk
 
 # Python (Brain / Voice)
