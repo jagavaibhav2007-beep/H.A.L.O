@@ -65,6 +65,57 @@ async def authenticate(session):
             frame = json.loads(await asyncio.wait_for(ws.recv(), 10))
 
 
+async def check_frozen_brain_tools(session, root, pdf_path, git_available):
+    async with connect(f"ws://127.0.0.1:{session['port']}") as ws:
+        await ws.send(json.dumps({
+            "type": "hello", "id": str(uuid.uuid4()), "ts": "2026-09-05T00:00:00Z",
+            "token": session["token"], "role": "ui",
+        }))
+        frame = json.loads(await asyncio.wait_for(ws.recv(), 5))
+        assert frame["type"] == "hello_ack", frame
+        while frame["type"] != "snapshot_complete":
+            frame = json.loads(await asyncio.wait_for(ws.recv(), 10))
+
+        await ws.send(json.dumps({
+            "type": "settings_update", "id": str(uuid.uuid4()),
+            "ts": "2026-09-05T00:00:00Z", "key": "project_roots", "value": [str(root)],
+        }))
+        while True:
+            frame = json.loads(await asyncio.wait_for(ws.recv(), 10))
+            if frame["type"] == "error":
+                raise AssertionError(f"frozen Brain rejected isolated project root: {frame}")
+            if frame["type"] == "project_roots_state":
+                assert str(root) in frame["roots"], frame
+                break
+
+        async def call_tool(tool, args, conversation_id):
+            await ws.send(json.dumps({
+                "type": "user_msg", "id": str(uuid.uuid4()),
+                "ts": "2026-09-05T00:00:00Z", "source": "ui",
+                "conversation_id": conversation_id,
+                "text": f"CALL_TOOL {tool} {json.dumps(args)}",
+            }))
+            activity = None
+            while True:
+                frame = json.loads(await asyncio.wait_for(ws.recv(), 30))
+                if frame["type"] == "activity" and frame.get("task_id") == f"tool-{conversation_id}":
+                    activity = frame
+                if frame["type"] == "error" and frame.get("conversation_id") == conversation_id:
+                    raise AssertionError(f"frozen Brain {tool} request failed: {frame}")
+                if frame["type"] == "done" and frame.get("conversation_id") == conversation_id:
+                    assert activity is not None, f"frozen Brain {tool} completed without successful activity"
+                    assert activity["tier"] == 1, activity
+                    return
+
+        await call_tool("file_read", {"path": str(pdf_path)}, "frozen-pdf-read")
+        print("[frozen] authenticated Brain file_read/PDF worker PASS", flush=True)
+        if git_available:
+            await call_tool("run_readonly_cmd", {"cmd": "git status"}, "frozen-git-read")
+            print("[frozen] authenticated Brain read-only Git PASS", flush=True)
+        else:
+            print("[frozen] authenticated Brain read-only Git UNAVAILABLE: Git is not installed/on PATH", flush=True)
+
+
 def check_frozen_workers(executable, root, env):
     from pypdf import PdfWriter
     from pypdf.generic import DictionaryObject, NameObject, DecodedStreamObject
@@ -109,6 +160,7 @@ def check_frozen_workers(executable, root, env):
     )
     assert result.returncode == 7 and "external-helper" in result.stdout, (result.returncode, result.stdout, result.stderr)
     print("[frozen] PDF text/pages, cancellation and external-command output/exit status PASS", flush=True)
+    return path
 
 
 def main():
@@ -124,11 +176,15 @@ def main():
         root = Path(folder)
         env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "PYTHONHOME")}
         env.update(LOCALAPPDATA=folder, TEMP=folder, TMP=folder, HF_HUB_OFFLINE="1", HALO_LLM_STUB="1", HALO_EXTRACT_STUB="1")
+        git_executable = shutil.which("git") if args.executable else None
         if args.executable:
             executable = root / "Halo backend café.exe"
             shutil.copy2(args.executable.resolve(), executable)
             command = [str(executable)]
-            env["PATH"] = str(Path(os.environ["SystemRoot"]) / "System32")
+            path_parts = [str(Path(os.environ["SystemRoot"]) / "System32")]
+            if git_executable:
+                path_parts.append(str(Path(git_executable).resolve().parent))
+            env["PATH"] = os.pathsep.join(path_parts)
         else:
             command = [python, "-I", "-m", "halo"]
         report = subprocess.run(command + ["diagnostics"], cwd=root, env=env, capture_output=True, text=True, check=True, timeout=30)
@@ -137,7 +193,12 @@ def main():
         assert all(value == expected for value in caps["documents"].values()), caps
         assert caps["semantic_dependencies"] == expected, caps
         if args.executable:
-            check_frozen_workers(executable, root, env)
+            pdf_path = check_frozen_workers(executable, root, env)
+            if git_executable:
+                subprocess.run(
+                    [git_executable, "init", "--quiet"], cwd=root, env=env,
+                    capture_output=True, text=True, check=True, timeout=10,
+                )
         for mode in ("brain", "voice"):
             subprocess.run(command + [mode, "--help"], cwd=root, env=env, capture_output=True, check=True, timeout=10)
         # -m compatibility must resolve the installed packages, not this tree.
@@ -161,7 +222,12 @@ def main():
                 first = brain()
                 session_path = root / "Halo" / "session.json"
                 session = wait_session(session_path, first)
-                asyncio.run(authenticate(session))
+                if args.executable:
+                    asyncio.run(check_frozen_brain_tools(
+                        session, root, pdf_path, git_executable is not None,
+                    ))
+                else:
+                    asyncio.run(authenticate(session))
                 voice = spawn("voice", voice_log)
                 def wait_voice(count):
                     # A cold one-file restart can miss two connection attempts,

@@ -14,10 +14,14 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import os
+import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
+from unittest.mock import patch
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 _TMP = tempfile.mkdtemp(prefix="halo-test-files-")
@@ -379,23 +383,18 @@ async def check_readonly_cmd() -> None:
 
 def check_git_helpers_are_disabled_by_construction() -> None:
     captured: dict = {}
-    real_run = files.subprocess.run
-
-    class Result:
-        returncode = 0
-        stdout = "clean"
-        stderr = ""
+    real_run = files._run_readonly_process
 
     def fake_run(parts, **kwargs):
         captured["parts"] = parts
         captured["env"] = kwargs.get("env")
-        return Result()
+        return subprocess.CompletedProcess(parts, 0, "clean", "")
 
-    files.subprocess.run = fake_run
+    files._run_readonly_process = fake_run
     try:
         result = files._run_cmd({"cmd": "git diff -- README.md"})
     finally:
-        files.subprocess.run = real_run
+        files._run_readonly_process = real_run
 
     command = captured["parts"]
     joined = " ".join(command)
@@ -407,6 +406,85 @@ def check_git_helpers_are_disabled_by_construction() -> None:
     assert captured["env"]["GIT_TERMINAL_PROMPT"] == "0"
     assert captured["env"]["GIT_PAGER"] == "cat"
     print("[check 6b] Git helpers/pagers/prompts are disabled in the executed argv/environment: OK")
+
+
+def check_frozen_git_uses_child_local_dll_sanitation() -> None:
+    captured: dict = {}
+    class Process:
+        pid = 123
+        returncode = 0
+
+        def communicate(self, timeout):
+            captured["timeout"] = timeout
+            return "clean", ""
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+        def kill(self):
+            raise AssertionError("completed fake process was killed")
+
+    class Job:
+        def __init__(self, pid):
+            captured["job_pid"] = pid
+
+        def close(self):
+            captured["job_closed"] = True
+
+    def fake_popen(parts, **kwargs):
+        captured["parts"] = parts
+        captured["kwargs"] = kwargs
+        return Process()
+
+    with (
+        patch.object(sys, "frozen", True, create=True),
+        patch.object(sys, "executable", r"C:\Program Files\Halo\Halo backend.exe"),
+        patch.object(files.subprocess, "Popen", fake_popen),
+        patch("brain.commanding._ProcessJob", Job),
+        patch("brain.commanding._resume_process", lambda pid: captured.update(resumed_pid=pid)),
+    ):
+        result = files._run_cmd({"cmd": "git status"})
+
+    command = captured["parts"]
+    kwargs = captured["kwargs"]
+    assert command[:3] == [
+        r"C:\Program Files\Halo\Halo backend.exe", "--external-command", "git",
+    ], command
+    assert captured["timeout"] == 10 and kwargs["shell"] is False, (captured, kwargs)
+    assert kwargs["env"]["GIT_CONFIG_NOSYSTEM"] == "1", kwargs["env"]
+    assert captured["job_pid"] == captured["resumed_pid"] == 123, captured
+    assert captured["job_closed"] is True, captured
+    if os.name == "nt":
+        assert kwargs["creationflags"] & files.subprocess.CREATE_NO_WINDOW, kwargs
+    print("[check 6c] frozen read-only Git routes through the child-local DLL sanitation boundary: OK")
+
+
+def check_readonly_process_timeout_kills_descendants() -> None:
+    sentinel = ROOT / "readonly-descendant-survived.txt"
+    sentinel.unlink(missing_ok=True)
+    child = (
+        "import time; from pathlib import Path; time.sleep(1); "
+        f"Path({str(sentinel)!r}).write_text('alive')"
+    )
+    parent = (
+        "import subprocess,sys,time; "
+        f"subprocess.Popen([sys.executable, '-c', {child!r}]); "
+        "time.sleep(30)"
+    )
+    try:
+        files._run_readonly_process(
+            [sys.executable, "-c", parent], cwd=ROOT,
+            env=os.environ.copy(), timeout=.25,
+        )
+        raise AssertionError("timed-out read-only process unexpectedly succeeded")
+    except subprocess.TimeoutExpired:
+        pass
+    time.sleep(1.25)
+    assert not sentinel.exists(), "a read-only command descendant survived timeout"
+    print("[check 6d] read-only command timeout kills the descendant process tree: OK")
 
 
 async def check_cmd_head_tail_truncation() -> None:
@@ -587,6 +665,8 @@ async def main() -> None:
     await check_organize_undo_is_atomic()
     await check_readonly_cmd()
     check_git_helpers_are_disabled_by_construction()
+    check_frozen_git_uses_child_local_dll_sanitation()
+    check_readonly_process_timeout_kills_descendants()
     await check_cmd_head_tail_truncation()
     check_resolve()
     await check_search()
