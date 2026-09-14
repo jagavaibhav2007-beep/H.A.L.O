@@ -19,6 +19,7 @@ from functools import wraps
 from threading import RLock
 from datetime import datetime, timezone
 from pathlib import Path
+from brain import memory_index, embedding
 
 try:
     import sqlite_vec
@@ -27,13 +28,15 @@ except (ImportError, OSError):
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 EMBED_DIM = 384
+EMBED_MODEL = embedding.MODEL_NAME
 
 _conn: sqlite3.Connection | None = None
 _embedder = None  # lazy fastembed.TextEmbedding singleton
 _vec_ok = False  # whether belief_vec is usable this session
 _embed_failed = False  # memoize a failed embedder init so we don't retry every call mid-turn
+_last_retrieval = "lexical"
 _OP_LOCK = RLock()  # one shared sqlite3 connection: serialize complete operations/transactions
 _EMBED_LOCK = RLock()  # construction of the embedder singleton ONLY. A4 deliberately
                        # runs _embed outside _OP_LOCK, which by construction makes it
@@ -73,14 +76,14 @@ def connect(db_path: Path | None = None) -> sqlite3.Connection:
 
     extension_loaded = False
     try:
-        if sqlite_vec is None:
+        if sqlite_vec is None or os.environ.get("HALO_SEMANTIC", "").lower() == "off":
             raise ImportError("semantic capability is not installed")
         conn.enable_load_extension(True)
         sqlite_vec.load(conn)
         extension_loaded = True
     except Exception as exc:
         logger.warning(
-            "sqlite-vec unavailable (%s); belief search will fall back to recency",
+            "sqlite-vec unavailable or disabled (%s); belief search uses lexical retrieval",
             type(exc).__name__,
         )
         _vec_ok = False
@@ -91,17 +94,22 @@ def connect(db_path: Path | None = None) -> sqlite3.Connection:
         except AttributeError:
             pass
 
-    _run_migrations(conn)
+    try:
+        _run_migrations(conn)
+    except BaseException:
+        conn.close()
+        raise
     if extension_loaded:
         try:
             with conn:
                 conn.execute(
                     f"CREATE VIRTUAL TABLE IF NOT EXISTS belief_vec USING vec0(embedding float[{EMBED_DIM}])"
                 )
+                memory_index.reconcile_vectors(conn)
             _vec_ok = True
         except Exception as exc:
             logger.warning(
-                "could not create belief_vec virtual table (%s); search will fall back to recency",
+                "could not prepare belief_vec virtual table (%s); search uses lexical retrieval",
                 type(exc).__name__,
             )
             _vec_ok = False
@@ -278,7 +286,8 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
                 if name not in task_cols:
                     conn.execute(f"ALTER TABLE task ADD COLUMN {name} {ddl}")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_task_state ON task(state, updated_at DESC)")
-        conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+        conn.execute("PRAGMA user_version=5")
+    memory_index.migrate(conn, SCHEMA_VERSION)
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -288,7 +297,7 @@ def _embed(text: str) -> list[float] | None:
     """Lazily init fastembed and embed one string. Returns None on any failure
     (offline/first-download-fails) -- memory degrades, never breaks (rule 5)."""
     global _embedder, _embed_failed
-    if not _vec_ok or _embed_failed:
+    if not _vec_ok or _embed_failed or os.environ.get("HALO_SEMANTIC", "").lower() == "off":
         return None
     try:
         if _embedder is None:
@@ -296,9 +305,7 @@ def _embed(text: str) -> list[float] | None:
             # the race re-reads the singleton the winner published.
             with _EMBED_LOCK:
                 if _embedder is None:
-                    from fastembed import TextEmbedding
-
-                    _embedder = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
+                    _embedder = embedding.load_model()
         vec = next(iter(_embedder.embed([text])))
         return [float(x) for x in vec]
     except Exception as exc:
@@ -310,7 +317,7 @@ def _embed(text: str) -> list[float] | None:
         # exception into normal logs; the exception class is enough to make
         # the fallback diagnosable without exposing a user's local path.
         logger.warning(
-            "embedding unavailable (%s); belief search will fall back to recency",
+            "embedding unavailable (%s); belief search uses lexical retrieval",
             type(exc).__name__,
         )
         return None
@@ -321,9 +328,16 @@ def _index_embedding(conn: sqlite3.Connection, belief_id: str, vec: list[float] 
     (A4) so a slow/first-time embed (model load/download) doesn't block every
     other store operation."""
     if vec is None:
+        # Text may have changed while embedding was unavailable. Never retain
+        # a vector for the old text under the new belief text.
+        _unindex(conn, belief_id)
         return
     # Caller owns the transaction, so belief text + vector index commit or
     # roll back together.
+    conn.execute(
+        "DELETE FROM belief_vec_stale WHERE rowid IN (SELECT rowid FROM belief_map WHERE belief_id=?)",
+        (belief_id,),
+    )
     conn.execute(
         "DELETE FROM belief_vec WHERE rowid IN (SELECT rowid FROM belief_map WHERE belief_id=?)", (belief_id,)
     )
@@ -346,7 +360,18 @@ def _unindex(conn: sqlite3.Connection, belief_id: str) -> None:
             "DELETE FROM belief_vec WHERE rowid IN (SELECT rowid FROM belief_map WHERE belief_id=?)",
             (belief_id,),
         )
-    conn.execute("DELETE FROM belief_map WHERE belief_id=?", (belief_id,))
+        conn.execute(
+            "DELETE FROM belief_vec_stale WHERE rowid IN (SELECT rowid FROM belief_map WHERE belief_id=?)",
+            (belief_id,),
+        )
+        conn.execute("DELETE FROM belief_map WHERE belief_id=?", (belief_id,))
+    else:
+        # Retain the mapping until vec0 can delete the old row. Removing it now
+        # could recycle its rowid and associate a new belief with stale data.
+        conn.execute(
+            "INSERT OR IGNORE INTO belief_vec_stale(rowid) SELECT rowid FROM belief_map WHERE belief_id=?",
+            (belief_id,),
+        )
 
 
 # ---------------------------------------------------------------- beliefs --
@@ -529,19 +554,24 @@ def restore_belief(belief_id: str) -> list[dict]:
 
 
 def search_beliefs(query_text: str, k: int = 15, live_only: bool = True) -> list[dict]:
-    """Vector similarity over active beliefs; falls back to recency if the
-    embedder/vec table is unavailable (memory degrades, never breaks).
+    """Vector similarity when ready, otherwise FTS5/BM25 over live beliefs.
+    Recency is only the final floor for empty/unmatched queries.
 
     live_only additionally excludes rows with a closed validity window
     (invalid_at set). ponytail: for active rows invalid_at is always NULL, so
     this is belt-and-suspenders today; it becomes load-bearing if invalidation
     ever detaches from the status enum."""
+    global _last_retrieval
+    if k <= 0:
+        return []
+    k = min(k, 100)
+    query_text = query_text[:4096]
     # A4: embed before the lock, matching add_candidate_belief.
     vec = _embed(query_text)
     with _OP_LOCK:
         conn = connect()
         live = " AND b.invalid_at IS NULL" if live_only else ""
-        if vec is not None:
+        if vec is not None and _vec_ok:
             try:
                 rows = conn.execute(
                     f"""
@@ -549,6 +579,7 @@ def search_beliefs(query_text: str, k: int = 15, live_only: bool = True) -> list
                     JOIN belief_map m ON m.rowid = v.rowid
                     JOIN belief b ON b.belief_id = m.belief_id
                     WHERE v.embedding MATCH ? AND k = ? AND b.status='active'{live}
+                    AND v.rowid NOT IN (SELECT rowid FROM belief_vec_stale)
                     ORDER BY distance
                     """,
                     (sqlite_vec.serialize_float32(vec), k),
@@ -558,15 +589,85 @@ def search_beliefs(query_text: str, k: int = 15, live_only: bool = True) -> list
                 # unindexed), not that there are no live beliefs. Fall through to
                 # the recency floor rather than returning [] and injecting no memory.
                 if rows:
+                    _last_retrieval = "semantic"
                     return [dict(r) for r in rows]
             except Exception:
-                logger.warning("vector search failed; falling back to recency", exc_info=True)
+                logger.warning("vector search failed; falling back to lexical retrieval", exc_info=True)
 
+        expression = memory_index.query(query_text)
+        if expression:
+            rows = conn.execute(
+                """SELECT b.*, bm25(belief_fts) AS lexical_score
+                   FROM belief_fts JOIN belief b ON b.belief_id=belief_fts.belief_id
+                   WHERE belief_fts MATCH ? AND b.status='active' AND b.invalid_at IS NULL
+                   ORDER BY lexical_score, b.salience DESC, b.belief_id LIMIT ?""",
+                (expression, k),
+            ).fetchall()
+            if rows:
+                _last_retrieval = "lexical"
+                return [dict(row) for row in rows]
+
+        _last_retrieval = "recency"
         live_flat = " AND invalid_at IS NULL" if live_only else ""
         rows = conn.execute(
             f"SELECT * FROM belief WHERE status='active'{live_flat} ORDER BY last_used_at DESC LIMIT ?", (k,)
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+def retrieval_status() -> dict:
+    disabled = os.environ.get("HALO_SEMANTIC", "").lower() == "off"
+    return {
+        "mode": _last_retrieval,
+        "vector_available": _vec_ok and not disabled,
+        "model_ready": _embedder is not None and not _embed_failed and not disabled,
+        "model": EMBED_MODEL,
+        "model_downloads_allowed": embedding.downloads_allowed(),
+        "model_revision": embedding.MODEL_REVISION,
+    }
+
+
+def reindex_beliefs(*, all_beliefs: bool = False) -> int:
+    """Explicit CLI maintenance: resumable batches, never rewrite belief text."""
+    with _OP_LOCK:
+        conn = connect()
+        if not _vec_ok:
+            raise ValueError("semantic retrieval is disabled or sqlite-vec is unavailable")
+        high = conn.execute("SELECT COALESCE(MAX(rowid),0) FROM belief").fetchone()[0]
+    last, indexed = 0, 0
+    while last < high:
+        with _OP_LOCK:
+            rows = conn.execute(
+                """SELECT rowid, belief_id, text FROM belief b
+                   WHERE rowid>? AND rowid<=? AND status='active' AND invalid_at IS NULL
+                   AND (? OR NOT EXISTS (SELECT 1 FROM belief_map m WHERE m.belief_id=b.belief_id)
+                        OR EXISTS (SELECT 1 FROM belief_map m JOIN belief_vec_stale s USING(rowid)
+                                   WHERE m.belief_id=b.belief_id))
+                   ORDER BY rowid LIMIT 64""",
+                (last, high, all_beliefs),
+            ).fetchall()
+        if not rows:
+            break
+        for row in rows:
+            last = row["rowid"]
+            vec = _embed(row["text"])  # model work never holds the store lock
+            if vec is None:
+                raise ValueError("embedding model unavailable; completed entries are retained; retry after repair")
+            with _OP_LOCK:
+                conn.execute("BEGIN IMMEDIATE")
+                try:
+                    current = conn.execute(
+                        "SELECT text FROM belief WHERE belief_id=? AND status='active' AND invalid_at IS NULL",
+                        (row["belief_id"],),
+                    ).fetchone()
+                    if current is not None and current["text"] == row["text"]:
+                        _index_embedding(conn, row["belief_id"], vec)
+                        indexed += 1
+                    conn.commit()
+                except BaseException:
+                    conn.rollback()
+                    raise
+    return indexed
 
 
 @_serialized

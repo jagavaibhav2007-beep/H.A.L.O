@@ -23,7 +23,7 @@ export interface HelloMsg extends IpcEnvelope {
 // envelope/field change; a major mismatch across the WS is refused loudly on
 // both sides. Hand-mirrored with brain/brain/ipc/contract.py CONTRACT_VERSION
 // and shared/ipc-contract.json "version" — check_contract_sync.py compares them.
-export const CONTRACT_VERSION = "1.5";
+export const CONTRACT_VERSION = "1.6";
 export const contractMajor = (v: string | undefined): number | null => {
   if (typeof v !== "string") return null;
   const major = Number.parseInt(v.split(".")[0], 10);
@@ -241,6 +241,13 @@ export interface CapabilitiesStateMsg extends IpcEnvelope {
   task_controls: boolean;
   skill_controls: boolean;
   demo_scenarios: boolean;
+  docs_pdf?: boolean;
+  docs_docx?: boolean;
+  docs_xlsx?: boolean;
+  docs_html?: boolean;
+  memory_retrieval?: "lexical" | "semantic" | "recency";
+  semantic_model_ready?: boolean;
+  semantic_downloads_allowed?: boolean;
 }
 
 export interface BeliefStateMsg extends IpcEnvelope {
@@ -419,6 +426,9 @@ export const CONTRACT_SPEC = {
     project_roots_state: message(OUT, ["roots"], { roots: field(J), pruned: field(J) }),
     capabilities_state: message(OUT, ["voice_input", "task_controls", "skill_controls", "demo_scenarios"], {
       voice_input: field(B), task_controls: field(B), skill_controls: field(B), demo_scenarios: field(B),
+      docs_pdf: field(B), docs_docx: field(B), docs_xlsx: field(B), docs_html: field(B),
+      memory_retrieval: field(S, ["lexical", "semantic", "recency"]),
+      semantic_model_ready: field(B), semantic_downloads_allowed: field(B),
     }),
     belief_state: message(OUT, ["belief_id", "text", "kind", "provenance", "salience", "status"], {
       belief_id: field(S), text: field(S),

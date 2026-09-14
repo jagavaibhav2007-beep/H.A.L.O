@@ -1,6 +1,24 @@
 # Migration Log
 _Database schema changes — newest first._
 
+## v6 (2026-09-14, dependency audit branch) — lexical belief index
+
+`brain/brain/memory_index.py` migrates v5 to v6 with explicit `BEGIN IMMEDIATE`:
+FTS5 table `belief_fts`, live-row backfill, insert/update/delete triggers,
+`belief_vec_stale`, and `user_version=6` commit together. Do not replace this
+with `executescript`, which implicitly commits before running its script.
+An injected trigger-creation denial verifies rollback leaves the v5 marker,
+original belief and no partial FTS table; retry succeeds.
+
+FTS includes only active beliefs with an open validity window. Unchanged
+existing embeddings survive profile toggles; edits/deletes while vec0 is
+unavailable retain mappings and mark them stale until vec0 can reconcile.
+`halo memory-reindex` repairs missing/stale live vectors in per-row commits;
+concurrent text changes are skipped. `--all` is an explicit new full pass,
+not a versioned model conversion. TaskRuntime's v5 columns remain unchanged.
+Behavioral evidence: `brain/tests/test_lexical_memory.py`; model identity and
+rollback/upgrade limits: `techstack/model-assets.md`.
+
 ## v5 (2026-07-31, undated in a prior session — backfilled 2026-08-01) — durable TaskRuntime metadata, `brain/brain/store.py`
 `PRAGMA user_version` 4 → 5. Additive only, `if version < 5:` guard; the `_TASK_TABLE` script runs unconditionally first because some v1-era databases predate the `task` table entirely, so the full current shape is created before the column-presence check runs:
 - `_TASK_TABLE` ensures the base `task` table exists on any pre-task-table DB.

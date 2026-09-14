@@ -23,6 +23,7 @@ def main() -> None:
     modes.add_parser("brain", help="start the authenticated Brain").add_argument("--mock", action="store_true")
     modes.add_parser("voice", help="start the reconnecting Voice sidecar")
     modes.add_parser("diagnostics", help="report installed capabilities without model downloads")
+    modes.add_parser("memory-reindex", help="rebuild missing local embeddings (may download the pinned model)").add_argument("--all", action="store_true")
     args = parser.parse_args()
     mode = args.mode
     sys.argv.pop(1)
@@ -32,7 +33,14 @@ def main() -> None:
         from voice.__main__ import main as run
     elif mode == "diagnostics":
         from brain.capabilities import capabilities
-        print(json.dumps(capabilities(), indent=2))
+        print(json.dumps(capabilities(verify_imports=True), indent=2))
+        return
+    elif mode == "memory-reindex":
+        from brain import store
+        try:
+            print(json.dumps({"indexed": store.reindex_beliefs(all_beliefs=args.all)}))
+        finally:
+            store.close()
         return
     else:
         raise SystemExit(f"unknown Halo mode: {mode}; use halo --help")

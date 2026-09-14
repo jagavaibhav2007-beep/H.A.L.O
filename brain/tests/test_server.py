@@ -469,7 +469,7 @@ async def _recv_settings_state(ws) -> dict:
         frame = json.loads(await asyncio.wait_for(ws.recv(), timeout=2))
         if frame["type"] == "settings_state":
             return frame
-        assert frame["type"] == "spend_update", frame
+        assert frame["type"] in ("spend_update", "capabilities_state"), frame
 
 
 async def check_settings_update_round_trip(port: int, token: str) -> None:

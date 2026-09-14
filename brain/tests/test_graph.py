@@ -213,7 +213,7 @@ async def check_interrupt(port: int, token: str) -> None:
             # spend_update is a GLOBAL broadcast, so the PREVIOUS check's turn
             # can land one here -- same skip idiom as test_gate.py. Asserting
             # "the very next frame is a token" was a latent race.
-            if frame["type"] == "spend_update":
+            if frame["type"] in ("spend_update", "capabilities_state"):
                 continue
             assert frame["type"] == "token", frame
             seen += 1
@@ -264,7 +264,7 @@ async def check_interrupt_stalled_stream(port: int, token: str) -> None:
         await _send_msg(ws, cid, "please wait forever")
         while True:  # skip a prior turn's global spend_update (see check_interrupt)
             first = json.loads(await asyncio.wait_for(ws.recv(), timeout=2))
-            if first["type"] != "spend_update":
+            if first["type"] not in ("spend_update", "capabilities_state"):
                 break
         assert first["type"] == "token" and first["conversation_id"] == cid, first
         await ws.send(json.dumps(_frame("interrupt", conversation_id=cid)))
@@ -299,6 +299,9 @@ async def check_midstream_error_honesty(port: int, token: str) -> None:
         await _send_msg(ws, cid, "trigger provider failure")
         token_frame = json.loads(await asyncio.wait_for(ws.recv(), timeout=2))
         assert token_frame["type"] == "token" and token_frame["text"] == "partial", token_frame
+        diagnostics = json.loads(await asyncio.wait_for(ws.recv(), timeout=2))
+        assert diagnostics["type"] == "capabilities_state", diagnostics
+        assert diagnostics["memory_retrieval"] in ("lexical", "semantic", "recency"), diagnostics
         error = json.loads(await asyncio.wait_for(ws.recv(), timeout=2))
         assert error["type"] == "error" and error["conversation_id"] == cid, error
         assert "provider disconnected" in error["message"], error
@@ -326,7 +329,7 @@ async def check_no_api_key(port: int, token: str) -> None:
         # Reading the first frame blind made this a timing-dependent flake.
         while True:
             frame = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
-            if frame["type"] != "spend_update":
+            if frame["type"] not in ("spend_update", "capabilities_state"):
                 break
         assert frame["type"] == "error", frame
         assert frame["code"] == "no_api_key", frame

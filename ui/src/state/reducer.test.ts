@@ -373,7 +373,20 @@ test("capabilities are projected so unsupported controls can be disabled before 
     taskControls: false,
     skillControls: false,
     demoScenarios: false,
+    documentFormats: null,
+    memoryRetrieval: null,
+    semanticModelReady: null,
+    semanticDownloadsAllowed: null,
   });
+});
+
+test("a partial format report cannot imply that every unreported parser is absent", () => {
+  const state = applyFrame(initialState, {
+    type: "capabilities_state", ...envelope(),
+    voice_input: false, task_controls: true, skill_controls: false, demo_scenarios: false,
+    docs_pdf: false,
+  });
+  expect(state.capabilities.documentFormats).toBeNull();
 });
 
 test("disconnect closes every queued assistant placeholder instead of leaving later turns spinning", () => {

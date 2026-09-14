@@ -36,6 +36,13 @@ and embedding dependencies; `full` includes both. Parsers load only when needed.
 Installed semantic dependencies do not imply a ready embedding model.
 Official desktop builds must validate the full profile.
 
+Core memory uses built-in SQLite FTS5/BM25. Set `HALO_SEMANTIC=off` to force
+lexical operation without altering unchanged stored vectors, or
+`HF_HUB_OFFLINE=1` to allow cached models but prohibit downloads. Settings
+distinguishes lexical, semantic and unmatched-query recency retrieval. See
+[model assets](techstack/model-assets.md) for the pinned model, cache, integrity
+checks and explicit `halo memory-reindex` maintenance command.
+
 For pip consumers, export the selected profile with
 `uv export --locked --extra full --no-emit-project --output-file requirements.txt`,
 then `python -m pip install --require-hashes -r requirements.txt` and

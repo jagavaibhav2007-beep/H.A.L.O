@@ -24,7 +24,7 @@ Companion to [systemdesign/13-document-ingestion.md](../systemdesign/13-document
 
 ## Install weight
 
-PDF fallback is pinned to pypdf 6.16.2 in the hashed Brain lock (minimum
+PDF fallback is pinned to pypdf 6.16.2 in the root hashed `uv.lock` (minimum
 `>=6.16.2,<7`). Its [upstream changelog](https://pypdf.readthedocs.io/en/6.16.2/meta/CHANGELOG.html)
 includes the 6.15.0 parser-complexity fixes and 6.16.1 XForm/outline iteration
 bounds. The previous 6.14.2 pin is affected by

@@ -53,3 +53,39 @@ test("settings groups continue the view heading hierarchy", () => {
     "Keys & connections",
   ]);
 });
+
+test("runtime diagnostics distinguish unknown, lexical and ready semantic retrieval", () => {
+  const view = render(<SettingsView sendSettingsUpdate={vi.fn()} />);
+  expect(screen.getByText("Not reported by this Brain")).toBeTruthy();
+  useHaloStore.getState().applyFrame({
+    type: "capabilities_state", id: "caps", ts: "2026-09-06T00:00:00Z",
+    voice_input: false, task_controls: true, skill_controls: false, demo_scenarios: false,
+    docs_pdf: true, docs_docx: false, docs_xlsx: false, docs_html: false,
+    memory_retrieval: "lexical", semantic_model_ready: false, semantic_downloads_allowed: false,
+  });
+  view.rerender(<SettingsView sendSettingsUpdate={vi.fn()} />);
+  expect(screen.getByText("Lexical (FTS5)")).toBeTruthy();
+  expect(screen.getByText("PDF")).toBeTruthy();
+  expect(screen.getByText("Not loaded · model downloads disabled")).toBeTruthy();
+  useHaloStore.getState().applyFrame({
+    type: "capabilities_state", id: "caps-ready", ts: "2026-09-09T00:00:00Z",
+    voice_input: false, task_controls: true, skill_controls: false, demo_scenarios: false,
+    docs_pdf: true, docs_docx: true, docs_xlsx: true, docs_html: true,
+    memory_retrieval: "semantic", semantic_model_ready: true, semantic_downloads_allowed: false,
+  });
+  view.rerender(<SettingsView sendSettingsUpdate={vi.fn()} />);
+  expect(screen.getByText("Semantic (local model)")).toBeTruthy();
+  expect(screen.getByText("Loaded · model downloads disabled")).toBeTruthy();
+  expect(screen.queryByText("Lexical (FTS5)")).toBeNull();
+});
+
+test("omitted download policy is unknown rather than disabled", () => {
+  useHaloStore.getState().applyFrame({
+    type: "capabilities_state", id: "partial-caps", ts: "2026-09-09T00:00:00Z",
+    voice_input: false, task_controls: true, skill_controls: false, demo_scenarios: false,
+    semantic_model_ready: true,
+  });
+  render(<SettingsView sendSettingsUpdate={vi.fn()} />);
+  expect(screen.getByText("Loaded · model download policy unknown")).toBeTruthy();
+  expect(screen.queryByText("Loaded · model downloads disabled")).toBeNull();
+});

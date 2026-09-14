@@ -678,6 +678,8 @@ async def _finish_turn(result: dict, cid: str, broadcast) -> bool:
     """Close one graph invocation: emit approval_request (suspended -> True),
     or error/done (-> False). Shared by run_turn and resume_turn -- a resumed
     run can hit another interrupt (edit re-raised the tier) and repeat."""
+    from brain.capabilities import runtime_frame
+    await broadcast("capabilities_state", runtime_frame())
     interrupts = result.get("__interrupt__")
     if interrupts:
         payload = dict(interrupts[0].value)
@@ -814,17 +816,9 @@ async def snapshot(send) -> None:
     from brain.tools import files
     await send("project_roots_state", await asyncio.to_thread(files.project_roots_state))
 
-    await send(
-        "capabilities_state",
-        {
-            "voice_input": False,
-            "task_controls": True,
-            "skill_controls": False,
-            "demo_scenarios": False,
-        },
-    )
-
-    store.connect()
+    from brain.capabilities import runtime_frame
+    await asyncio.to_thread(store.connect)
+    await send("capabilities_state", runtime_frame())
     tasks = await asyncio.to_thread(store.list_tasks, _SNAPSHOT_TASK_STATES)
     for row in tasks:
         await send("task_state", _task_frame(row))

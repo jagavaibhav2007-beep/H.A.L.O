@@ -27,7 +27,7 @@ Curated, short, self-maintaining. The "second brain." Local only.
 |---|---|---|---|
 | **Working** | RAM (LangGraph state) | one conversation | working context |
 | **Episodic [v2 new]** | SQLite `session_summary` | durable | one compact summary per conversation-session: what happened, why, open loops |
-| **Semantic (beliefs)** | SQLite + sqlite-vec | durable, decays | the few facts Halo *reasons from* (preferences, active projects, workflows, key decisions, failure lessons) |
+| **Semantic (beliefs)** | SQLite FTS5 + optional sqlite-vec | durable, decays | the few facts Halo *reasons from* (preferences, active projects, workflows, key decisions, failure lessons) |
 | **Raw activity log** | SQLite | rolling window | searchable record of what Halo did; powers the activity feed + undo |
 
 Only **beliefs** and (sparingly) **session summaries** feed reasoning. The raw
@@ -80,7 +80,7 @@ trigger (idle / shutdown / startup-recovery / pressure)
       (prompt carries negative examples + the IDs of beliefs that were
        injected into the conversation, so restatements of Halo's own
        memory are never re-extracted — the mem0#4573 feedback-loop fix)
-  → for each candidate: vector-fetch top-5 existing neighbors
+  → for each candidate: retrieve top-5 existing neighbors (vectors when ready, otherwise FTS5)
   → ONE light-model decision call per candidate (mem0 AUDN):
         ADD              no equivalent exists
         UPDATE(id)       complements/corrects an existing belief
@@ -139,14 +139,44 @@ cursor advances. Memory stays short by design.
 
 ## Retrieval
 
-- Beliefs: vector search, top-15 or ~1k tokens (whichever smaller), ranked
-  relevance × salience, filtered to live rows
+- Beliefs: optional vector KNN preserves the existing full-profile ranking.
+  If semantic support/model loading is unavailable, SQLite FTS5 supplies BM25
+  relevance with salience and ID tie-breakers. Blank or unmatched queries retain
+  a recency floor; diagnostics distinguish this from a relevance match.
+  The prompt uses top-15 or ~1k tokens (whichever smaller), filtered to live rows
   (`invalid_at IS NULL AND status = 'active'`). Injected belief IDs are
   recorded in the turn context so consolidation can skip restatements.
 - **[v2 new]** Episodic: the most recent session summary for the active
   conversation's predecessor (~100 tokens) is prepended for continuity; up to
   2 older summaries join only on vector relevance. Separate ~300-token budget.
   Summaries never enter the prompt wholesale-by-count — relevance only.
+
+### Lexical index and profile migration (schema v6)
+
+`belief_fts` indexes only active beliefs with `invalid_at IS NULL`. FTS creation,
+live-row backfill, insert/update/delete triggers and the schema version commit
+in one transaction. An interrupted migration rolls back and can be retried;
+belief text and existing vectors are not rewritten during backfill. Triggers
+keep the lexical index in the same transaction as every belief mutation.
+
+Queries become bounded literal terms or quoted phrases (4,096 input characters,
+64 unique terms/phrases); raw FTS operators are not passed through. `unicode61`
+handles Unicode words and diacritics, but is not a language-aware CJK segmenter:
+unspaced substrings inside a CJK token need not match.
+
+Turning semantic support off preserves unchanged embeddings and their mappings.
+Edits/deletions while vec0 is unavailable record stale mappings; reopening with
+vec0 reconciles those stale/orphan rows without deleting unchanged embeddings.
+Missing vectors can be regenerated explicitly with `halo memory-reindex`.
+It commits each successful row, skips non-live or concurrently changed text,
+and a retry skips already indexed rows. `--all` deliberately re-embeds every
+live belief; rerunning that flag starts a new full pass. See
+[model assets](../techstack/model-assets.md) before changing model identity.
+
+Settings shows the last retrieval mode, model readiness and document formats
+from `capabilities_state`. These are process-wide diagnostics, not a claim that
+every turn searched memory or that installed model dependencies imply loaded
+weights. Startup and capability inspection do not download a model.
 
 ## UI hydration [v2 — replaces replay-everything]
 

@@ -36,20 +36,37 @@ def require_document_modules(kind: str) -> None:
             ) from exc
 
 
-def _available(modules: tuple[str, ...]) -> bool:
+def _available(modules: tuple[str, ...], verify_imports: bool) -> bool:
     try:
         for module in modules:
-            import_module(module)
+            if verify_imports:
+                import_module(module)
+            elif find_spec(module) is None:
+                return False
         return True
-    except (ImportError, OSError):
+    except (ImportError, OSError, ValueError):
         return False
 
 
-def capabilities() -> dict:
+def capabilities(*, verify_imports: bool = False) -> dict:
     return {
-        "documents": {kind: _available(modules) for kind, modules in DOCUMENT_MODULES.items()},
-        "semantic_dependencies": _available(("sqlite_vec", "fastembed")),
+        "documents": {kind: _available(modules, verify_imports) for kind, modules in DOCUMENT_MODULES.items()},
+        "semantic_dependencies": _available(("sqlite_vec", "fastembed"), verify_imports),
         "semantic_model": "not probed (dependency availability is not model readiness)",
+    }
+
+
+def runtime_frame() -> dict:
+    from brain import store
+    installed = capabilities()
+    retrieval = store.retrieval_status()
+    return {
+        "voice_input": False, "task_controls": True,
+        "skill_controls": False, "demo_scenarios": False,
+        **{f"docs_{kind}": value for kind, value in installed["documents"].items()},
+        "memory_retrieval": retrieval["mode"],
+        "semantic_model_ready": retrieval["model_ready"],
+        "semantic_downloads_allowed": retrieval["model_downloads_allowed"],
     }
 
 

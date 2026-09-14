@@ -82,6 +82,10 @@ interface CapabilityState {
   taskControls: boolean | null;
   skillControls: boolean | null;
   demoScenarios: boolean | null;
+  documentFormats?: string[] | null;
+  memoryRetrieval?: "lexical" | "semantic" | "recency" | null;
+  semanticModelReady?: boolean | null;
+  semanticDownloadsAllowed?: boolean | null;
 }
 
 interface SnapshotState {
@@ -628,6 +632,13 @@ export function applyFrame(state: HaloState, frame: IpcMessage): HaloState {
           taskControls: frame.task_controls,
           skillControls: frame.skill_controls,
           demoScenarios: frame.demo_scenarios,
+          documentFormats: [frame.docs_pdf, frame.docs_docx, frame.docs_xlsx, frame.docs_html].some(value => value === undefined) ? null : [
+            ...(frame.docs_pdf ? ["PDF"] : []), ...(frame.docs_docx ? ["DOCX"] : []),
+            ...(frame.docs_xlsx ? ["XLSX"] : []), ...(frame.docs_html ? ["HTML"] : []),
+          ],
+          memoryRetrieval: frame.memory_retrieval ?? null,
+          semanticModelReady: frame.semantic_model_ready ?? null,
+          semanticDownloadsAllowed: frame.semantic_downloads_allowed ?? null,
         },
       };
 

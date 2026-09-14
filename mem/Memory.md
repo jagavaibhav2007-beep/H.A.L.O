@@ -1,6 +1,29 @@
 # Memory
 _Current project state, active goals, and key context._
 
+## 2026-09-14 dependency audit resume point (not merged)
+
+- Branch `codex/dependency-framework-audit`, isolated worktree
+  `.worktrees/dependency-framework-audit`; main checkout is preserved. Follow
+  `AUDIT_EXECUTION_PLAN.md` and the user's `DEPENDENCY_FRAMEWORK_AUDIT.md`.
+- Commits `e8ad7dc`, `8c2f77f`, `d4c5fea` implement PDF containment, one root
+  Python distribution/lock/profiles, and the full frozen backend. Independent
+  review found a read-only Git launch sanitation gap; fix round 1 is active.
+- Lexical memory/schema6 and contract1.6 diagnostics are implemented but
+  uncommitted and under independent review. Focused memory, protocol and UI
+  tests pass. Real pinned model and cached-only relevance smoke passed on
+  2026-09-09; weights are only in the ignored test cache, not the installer.
+- Full integration gate passed 2026-09-14: all Python/Voice suites, contract
+  mirrors, UI self-checks, 94 UI tests/build, 13 Rust tests and all phase gates.
+  Durable output: `.tmp/memory-verification.log`. Independent memory review
+  then found a decomposed-Unicode query mismatch and a premature initial
+  last-retrieval label; follow-up fixes and scoped review remain required.
+- Next: finish/review packaging fix and memory, then checkpoint adapter and
+  conditional LangGraph decision, governance/upgrades/SBOM, final artifact
+  rebuild and requirement-by-requirement verification. Project license choice
+  is deferred by the user; no merge, publish, install, signing or credential
+  changes are implied. Native clean-machine acceptance remains unverified.
+
 - **2026-08-10 user acceptance confirmed on merged `main`.** The user manually verified the batched PDF workflow after the task-runtime/UI changes were merged: folder ingestion completes with one connected assistant response, working/progress feedback is visible, and Stop responds and terminates correctly. The accepted implementation ends at `262e768`; the merged checkout also passed `./dev.ps1 -Verify` with 34 synchronized contract schemas, every Python/Voice suite, five UI self-checks, Vitest 91/91, the production UI build, Rust 11/11, and all Phase 0/1/2 protocol gates.
 
 - **2026-08-10 batched document completion and cancellation UX implemented.** Detached tasks now aggregate by `origin_turn_id` and yield exactly one model continuation after the sealed group is terminal; task-start-only prose and empty bubbles are suppressed. Contract 1.5 adds complete `stopping`/`stopped` snapshots. `doc_digest` now supports deterministic `path`+`glob` batches (direct children by default, explicit recursion, 64-file pre-work cap), continues after structured per-file failures, reports extraction/synthesis progress, and runs PDF parsing in a deadline-bound spawned process that Stop can terminate and reap. The workspace status strip and Tasks page show animated/reduced-motion-safe working feedback, immediate focus-preserving `Stopping…`, clamped determinate progress, and neutral Stopped history. Verification: full `./dev.ps1 -Verify` green (34 contract schemas, all Python/Voice suites, five UI self-checks, Vitest 91/91, production build, Rust 11/11, Phase 0/1/2 gates); rendered browser QA also confirmed the live cancellation interaction, 640px layout, and a clean warning/error console.

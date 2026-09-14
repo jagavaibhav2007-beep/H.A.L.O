@@ -424,7 +424,7 @@ def check_migration_v1_to_v3(tmp: Path) -> None:
     store.close()  # release any live module connection before opening the v1 file
     conn = store.connect(v1_path)
     try:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == store.SCHEMA_VERSION == 5
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == store.SCHEMA_VERSION == 6
         cols = {r[1] for r in conn.execute("PRAGMA table_info(belief)").fetchall()}
         assert "valid_at" in cols and "invalid_at" in cols, cols
 
@@ -502,7 +502,7 @@ def check_migration_half_migrated_is_idempotent(tmp: Path) -> None:
     store.close()
     conn = store.connect(v1_path)
     try:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == store.SCHEMA_VERSION == 5
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == store.SCHEMA_VERSION == 6
         assert store.get_belief("a") is not None
     finally:
         store.close()
@@ -535,7 +535,7 @@ def check_migration_v2_to_v3(tmp: Path) -> None:
 
     conn = store.connect(v2_path)
     try:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == store.SCHEMA_VERSION == 5
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == store.SCHEMA_VERSION == 6
         tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
         assert "digest_cache" in tables, tables
         store.put_digest("C:/y/report.docx", "sha-2", 1, {"gist": "ok"})
@@ -614,7 +614,7 @@ def check_embedder_built_once_under_concurrency() -> None:
     builds: list[int] = []
 
     class _FakeEmbedding:
-        def __init__(self, model_name=None):
+        def __init__(self, model_name=None, **kwargs):
             builds.append(1)
             time.sleep(0.2)  # widen the window the unguarded check raced through
 
@@ -625,6 +625,8 @@ def check_embedder_built_once_under_concurrency() -> None:
     fake.TextEmbedding = _FakeEmbedding
     prev_module = _sys.modules.get("fastembed")
     _sys.modules["fastembed"] = fake
+    previous_model_path = store.embedding.model_path
+    store.embedding.model_path = lambda: Path("synthetic-model")
     # _embed short-circuits to None unless both of these hold -- without setting
     # them the embedder is never constructed and the test asserts nothing.
     prev_embedder, prev_vec_ok, prev_failed = store._embedder, store._vec_ok, store._embed_failed
@@ -636,6 +638,7 @@ def check_embedder_built_once_under_concurrency() -> None:
         assert all(v is not None and len(v) == store.EMBED_DIM for v in vecs), "embed returned nothing"
     finally:
         store._embedder, store._vec_ok, store._embed_failed = prev_embedder, prev_vec_ok, prev_failed
+        store.embedding.model_path = previous_model_path
         if prev_module is None:
             _sys.modules.pop("fastembed", None)
         else:

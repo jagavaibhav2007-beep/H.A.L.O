@@ -25,7 +25,7 @@ documents = [
     "openpyxl>=3.1",
     "markdownify>=0.13",
 ]
-semantic = ["sqlite-vec>=0.1", "fastembed>=0.3"]
+semantic = ["sqlite-vec>=0.1", "fastembed>=0.3", "huggingface-hub>=1,<2"]
 full = ["halo-local-assistant[documents,semantic]"]
 
 [project.scripts]
