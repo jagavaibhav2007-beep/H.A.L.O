@@ -36,7 +36,7 @@ _conn: sqlite3.Connection | None = None
 _embedder = None  # lazy fastembed.TextEmbedding singleton
 _vec_ok = False  # whether belief_vec is usable this session
 _embed_failed = False  # memoize a failed embedder init so we don't retry every call mid-turn
-_last_retrieval = "lexical"
+_last_retrieval = None
 _OP_LOCK = RLock()  # one shared sqlite3 connection: serialize complete operations/transactions
 _EMBED_LOCK = RLock()  # construction of the embedder singleton ONLY. A4 deliberately
                        # runs _embed outside _OP_LOCK, which by construction makes it

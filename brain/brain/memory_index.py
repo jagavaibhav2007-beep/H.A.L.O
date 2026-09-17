@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
+import unicodedata
 
 
 def migrate(conn: sqlite3.Connection, version: int) -> None:
@@ -66,6 +67,7 @@ def reconcile_vectors(conn: sqlite3.Connection) -> None:
 
 def query(text: str) -> str:
     """Bounded literal terms/quoted phrases; never expose raw FTS operators."""
+    text = unicodedata.normalize("NFC", text)
     parts = []
     for phrase, word in re.findall(r'"([^"]+)"|([^\W_]+)', text[:4096], flags=re.UNICODE):
         words = re.findall(r"[^\W_]+", phrase or word, flags=re.UNICODE)[:32]

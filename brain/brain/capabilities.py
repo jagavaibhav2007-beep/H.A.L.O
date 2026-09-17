@@ -60,14 +60,16 @@ def runtime_frame() -> dict:
     from brain import store
     installed = capabilities()
     retrieval = store.retrieval_status()
-    return {
+    frame = {
         "voice_input": False, "task_controls": True,
         "skill_controls": False, "demo_scenarios": False,
         **{f"docs_{kind}": value for kind, value in installed["documents"].items()},
-        "memory_retrieval": retrieval["mode"],
         "semantic_model_ready": retrieval["model_ready"],
         "semantic_downloads_allowed": retrieval["model_downloads_allowed"],
     }
+    if retrieval["mode"] is not None:
+        frame["memory_retrieval"] = retrieval["mode"]
+    return frame
 
 
 def require_full() -> None:

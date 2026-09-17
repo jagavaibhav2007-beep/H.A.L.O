@@ -31,6 +31,9 @@ def without_extras():
         belief, _ = store.add_candidate_belief('local preference', 'preference', 'user')
         assert store.get_belief(belief)['text'] == 'local preference'
         assert not capabilities()['semantic_dependencies']
+        assert 'memory_retrieval' not in runtime_frame(), (
+            'startup diagnostics must not invent a last-retrieval mode before the first search'
+        )
         assert store.search_beliefs('preference')[0]['belief_id'] == belief
         runtime = runtime_frame()
         assert runtime['memory_retrieval'] == 'lexical'

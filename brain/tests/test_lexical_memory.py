@@ -6,6 +6,7 @@ from pathlib import Path
 import sqlite3
 import sys
 import tempfile
+import unicodedata
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -29,6 +30,8 @@ def lexical(root):
             add(f"unrelated recent event {n}")
         assert store.search_beliefs("pnpm", k=1)[0]["belief_id"] == relevant
         assert store.search_beliefs("cafe Zürich", k=1)[0]["belief_id"] == cafe
+        decomposed_city = unicodedata.normalize("NFD", "Zürich")
+        assert store.search_beliefs(decomposed_city, k=1)[0]["belief_id"] == cafe
         assert store.search_beliefs("东京", k=1)[0]["belief_id"] == tokyo
         assert store.search_beliefs('"New York"', k=1)[0]["belief_id"] == phrase
         assert store.search_beliefs("unfindableword", k=1)
