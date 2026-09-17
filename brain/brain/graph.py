@@ -20,13 +20,11 @@ from operator import add
 from pathlib import Path
 from typing import Annotated, TypedDict
 
-import aiosqlite
-from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.errors import GraphInterrupt
 from langgraph.graph import END, START, StateGraph
-from langgraph.types import Command
 
 from brain import gate, llm, memory, secrets_store, store, task_runtime
+from brain.checkpoints import CheckpointStore
 import brain.tools.files  # noqa: F401 -- import registers the Lane-1 file tools into gate.TOOLS
 import brain.tools.docs  # noqa: F401 -- import registers doc_digest (Layer 2, systemdesign/13)
 import brain.tools.commands  # noqa: F401 -- registers managed command/script tasks
@@ -137,7 +135,7 @@ class State(TypedDict, total=False):
 
 
 _graph = None
-_saver_conn: aiosqlite.Connection | None = None
+_checkpoints: CheckpointStore | None = None
 # Session spend/token totals live in llm.session_totals() -- accumulated at the
 # one choke point every LLM call passes through, so background consolidation and
 # doc_digest can no longer spend invisibly (measured: session_usd was 2.9x under).
@@ -473,19 +471,11 @@ async def _respond_node(state: State, config) -> dict:
 
 
 async def _ensure_graph():
-    global _graph, _saver_conn
+    global _graph, _checkpoints
     if _graph is not None:
         return _graph
     path = _checkpoint_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    conn = aiosqlite.connect(str(path))
-    # aiosqlite (>=0.21) runs each connection on a non-daemon worker thread;
-    # without daemonizing it, any interpreter that finishes with the
-    # checkpointer still open (tests, smoke scripts) hangs forever on exit.
-    # ponytail: private attr poke -- aiosqlite has no public daemon knob; the
-    # thread exists but isn't started until the await below, so this is safe.
-    conn._thread.daemon = True
-    _saver_conn = await conn
+    _checkpoints = await CheckpointStore.open(path)
     builder = StateGraph(State)
     builder.add_node("route", _route_node)
     builder.add_node("respond", _respond_node)
@@ -510,7 +500,7 @@ async def _ensure_graph():
         _after_gate,
         {"gate": "gate", "respond": "respond", END: END},
     )
-    _graph = builder.compile(checkpointer=AsyncSqliteSaver(_saver_conn))
+    _graph = _checkpoints.compile(builder)
     global _recovery_started, _recovery_task
     if not _recovery_started:
         _recovery_started = True
@@ -518,9 +508,14 @@ async def _ensure_graph():
     return _graph
 
 
-async def push_conversation_history(msg: dict, send) -> None:
+async def _checkpoint_snapshot(conversation_id: str):
     graph = await _ensure_graph()
-    snap = await graph.aget_state({"configurable": {"thread_id": msg["conversation_id"]}})
+    assert _checkpoints is not None
+    return await _checkpoints.snapshot(graph, conversation_id)
+
+
+async def push_conversation_history(msg: dict, send) -> None:
+    snap = await _checkpoint_snapshot(msg["conversation_id"])
     turns = [
         {
             "role": item["role"],
@@ -557,14 +552,12 @@ async def _recover_consolidation() -> None:
         dirty = await asyncio.to_thread(store.list_dirty_conversations)
         if not dirty:
             return
-        graph = await _ensure_graph()
-
         async def _noop(_type, _payload):
             return
 
         for row in dirty:
             cid = row["conversation_id"]
-            snap = await graph.aget_state({"configurable": {"thread_id": cid}})
+            snap = await _checkpoint_snapshot(cid)
             messages = snap.values.get("messages", [])
             if messages:
                 await memory.consolidate_span(cid, messages, api_key, _noop)
@@ -576,7 +569,7 @@ async def aclose() -> None:
     """Close the checkpointer (tests' simulated restart; process exit doesn't
     need it -- SQLite WAL survives a kill, which is the restart semantics:
     history persists, a dead half-streamed turn is never auto-resumed)."""
-    global _graph, _saver_conn
+    global _graph, _checkpoints
     try:
         # Consolidate any dirty conversations before the saver closes (flush
         # needs nothing from it) so a graceful shutdown doesn't lose a session's
@@ -585,11 +578,11 @@ async def aclose() -> None:
     except Exception:  # noqa: BLE001 - shutdown flush must not block teardown
         logger.exception("memory flush on shutdown failed")
     try:
-        if _saver_conn is not None:
-            await _saver_conn.close()
+        if _checkpoints is not None:
+            await _checkpoints.close()
     finally:
         _graph = None
-        _saver_conn = None
+        _checkpoints = None
         await llm.aclose()
 
 
@@ -649,29 +642,10 @@ _CHECKPOINT_KEEP = 20
 
 
 async def _prune_checkpoints(cid: str) -> int:
-    """Delete all but the newest _CHECKPOINT_KEEP checkpoints of one thread.
-
-    checkpoint_id is a time-ordered UUID and the saver itself selects the live
-    checkpoint with `ORDER BY checkpoint_id DESC`, so lexicographic order is
-    recency order. Runs on the saver's own lock/connection -- it is shared and
-    actively in use. Pruned rows leave a dangling parent_checkpoint_id on the
-    oldest survivor, which is fine for aget_state (latest-only)."""
-    graph = await _ensure_graph()
-    saver = graph.checkpointer
-    conn = saver.conn
-    async with saver.lock:
-        keep_q = (
-            "SELECT checkpoint_id FROM checkpoints WHERE thread_id = ? "
-            "ORDER BY checkpoint_id DESC LIMIT ?"
-        )
-        # writes first: it references checkpoint_ids the second statement drops.
-        for table in ("writes", "checkpoints"):
-            cur = await conn.execute(
-                f"DELETE FROM {table} WHERE thread_id = ? AND checkpoint_id NOT IN ({keep_q})",
-                (cid, cid, _CHECKPOINT_KEEP),
-            )
-        await conn.commit()
-    return cur.rowcount  # checkpoints deleted (last statement of the loop)
+    """Delete all but the newest checkpoints through the persistence adapter."""
+    await _ensure_graph()
+    assert _checkpoints is not None
+    return await _checkpoints.prune(cid, keep=_CHECKPOINT_KEEP)
 
 
 async def _finish_turn(result: dict, cid: str, broadcast) -> bool:
@@ -724,29 +698,6 @@ async def _finish_turn(result: dict, cid: str, broadcast) -> bool:
     return False
 
 
-async def _threads_with_open_interrupt(saver) -> list[str]:
-    """Thread ids whose LATEST checkpoint still carries an `__interrupt__` write
-    -- i.e. currently suspended at a Tier-3 approval. This replaces the old
-    "scan every thread ever created and aget_state each one" cost that ran on
-    EVERY connect (both webviews connect), which amplified reconnect work and
-    could overflow deferred snapshot broadcasts. A resumed interrupt writes a
-    newer checkpoint with no `__interrupt__` write, so pinning to the newest
-    checkpoint_id per thread excludes already-answered ones. Verified against the
-    real DB and a live interrupt/resume round-trip to equal aget_state(...)
-    .interrupts exactly (test_graph check 6). Depends on the langgraph
-    `writes`/`checkpoints` table shape -- the same coupling _prune_checkpoints
-    already relies on; if langgraph renames the interrupt channel this returns
-    [] and rehydrate degrades to "no pending approvals restored", never a crash."""
-    q = (
-        "SELECT DISTINCT w.thread_id FROM writes w "
-        "WHERE w.channel = '__interrupt__' AND w.checkpoint_id = ("
-        "  SELECT checkpoint_id FROM checkpoints ck WHERE ck.thread_id = w.thread_id "
-        "  ORDER BY checkpoint_id DESC LIMIT 1)"
-    )
-    async with saver.lock, saver.conn.execute(q) as cur:
-        return [row[0] async for row in cur]
-
-
 async def rehydrate_pending() -> None:
     """Rebuild gate's approval_id -> conversation_id map from the checkpoints
     after a Brain restart. Without this a Tier-3 approval that was open when
@@ -757,17 +708,17 @@ async def rehydrate_pending() -> None:
     with it. Idempotent: safe to call on every connect (two windows do), and a
     live entry is never clobbered."""
     graph = await _ensure_graph()
-    saver = graph.checkpointer
-    await saver.setup()
+    assert _checkpoints is not None
     # B3: only threads whose LATEST checkpoint carries an unresolved interrupt
     # can hold a pending approval, so deserialize exactly those instead of every
-    # thread ever created (see _threads_with_open_interrupt). snap.interrupts
+    # thread ever created (see CheckpointStore.open_interrupt_threads).
+    # snap.interrupts
     # below stays the authority that builds the payload -- the query only narrows
     # which threads we touch, so a false positive is harmless and empty is a
     # no-op.
-    thread_ids = await _threads_with_open_interrupt(saver)
+    thread_ids = await _checkpoints.open_interrupt_threads()
     for cid in thread_ids:
-        snap = await graph.aget_state({"configurable": {"thread_id": cid}})
+        snap = await _checkpoints.snapshot(graph, cid)
         for intr in snap.interrupts:
             payload = dict(intr.value) if isinstance(intr.value, dict) else intr.value
             if not isinstance(payload, dict) or "approval_id" not in payload:
@@ -865,7 +816,8 @@ async def run_turn(msg: dict, broadcast) -> None:
             return
 
         config = {"configurable": {"thread_id": cid}, "recursion_limit": _RECURSION_LIMIT}
-        prior = await graph.aget_state(config)
+        assert _checkpoints is not None
+        prior = await _checkpoints.snapshot(graph, cid)
         content = msg["text"]
         if prior.values.get("redirected"):
             content = _REDIRECT_NOTE + content
@@ -972,9 +924,12 @@ async def resume_turn(approval_id: str, decision: str, edited_args: dict | None,
         }
         _turn_ctx[cid] = ctx
         try:
-            result = await graph.ainvoke(
-                Command(resume=resume_val),
-                {"configurable": {"thread_id": cid}, "recursion_limit": _RECURSION_LIMIT},
+            assert _checkpoints is not None
+            result = await _checkpoints.resume(
+                graph,
+                cid,
+                resume_val,
+                recursion_limit=_RECURSION_LIMIT,
             )
         finally:
             _turn_ctx.pop(cid, None)
