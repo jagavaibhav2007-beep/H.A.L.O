@@ -29,6 +29,9 @@ jobs:
       - name: Verify copied backend without Python on PATH
         shell: pwsh
         run: ./.venv/Scripts/python.exe shared/python_profile_check.py --executable dist/halo-backend.exe --profile full
+      - name: Generate release SBOMs
+        shell: pwsh
+        run: ./scripts/generate-sbom.ps1 -BackendPath dist/halo-backend.exe
       - uses: actions/upload-artifact@v4
         with:
           name: halo-windows-x64-unsigned
@@ -36,3 +39,4 @@ jobs:
           path: |
             dist/halo-backend.exe
             ui/src-tauri/target/release/bundle/nsis/*.exe
+            .tmp/sbom/*.cdx.json

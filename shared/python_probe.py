@@ -3,7 +3,7 @@ import importlib
 import sys
 
 CORE_MODULES = (
-    "websockets", "httpx", "keyring", "langgraph", "langgraph.checkpoint.sqlite", "aiosqlite",
+    "websockets", "httpx", "keyring", "langgraph", "langgraph.checkpoint.sqlite",
 )
 
 

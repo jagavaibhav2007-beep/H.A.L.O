@@ -1,4 +1,32 @@
 # Decisions
+
+## 2026-09-17 - Keep LangGraph behind an adapter; defer state-machine replacement
+
+**Decided:** retain pinned LangGraph and `langgraph-checkpoint-sqlite` through
+`CheckpointStore` (Option A). Do not begin the audit's conditional Option B.
+
+**Rationale:** LangGraph presently owns execution, reducers, tool-round routing,
+streaming, checkpoint serialization, and interrupt/resume. The adapter removes
+private connection/thread access and contains the only necessary validated
+schema coupling. Existing restart, approval, history, snapshot, concurrency and
+Phase-2 gates continue to pass without a data migration.
+
+**Trade-off:** upstream checkpoint schema remains a deliberate compatibility
+surface. Option B requires a versioned converter for existing `checkpoints.db`,
+at-most-once/idempotency evidence across every side-effect boundary, rollback,
+and measured startup/footprint benefit before it can be reconsidered.
+
+## 2026-09-17 - Defer H.A.L.O. project license while inventorying dependencies
+
+**Decided:** add no project SPDX license or redistribution claim until the owner
+makes the legal choice after the product is finished. Generate dependency/model
+SBOMs and third-party review inputs independently of that choice.
+
+**Rationale:** source availability is not a license, while dependency and model
+obligations still need a reproducible inventory before any release.
+
+**Trade-off:** outside code contributions and redistribution remain restricted;
+release review must resolve unknown/mismatched upstream metadata manually.
 _Architectural, structural, and system design choices._
 
 ## Detached task replies follow the originating user turn — 2026-08-10

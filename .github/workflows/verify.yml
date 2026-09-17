@@ -10,11 +10,15 @@ permissions:
 jobs:
   phase-2-gate:
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
           cache: pip
           cache-dependency-path: uv.lock
       - uses: actions/setup-node@v6
@@ -28,7 +32,7 @@ jobs:
         shell: pwsh
         run: |
           python -m pip install uv==0.11.3
-          uv sync --locked --extra full --python 3.12
+          uv sync --locked --extra full --python ${{ matrix.python-version }}
           uv pip check
       - name: Install locked UI dependencies
         working-directory: ui
@@ -39,12 +43,34 @@ jobs:
           HF_HUB_OFFLINE: "1"
         run: ./dev.ps1 -Verify
 
+      - name: Check dependency locks
+        if: matrix.python-version == '3.12'
+        shell: pwsh
+        run: ./scripts/check-locks.ps1
       - name: Audit npm dependencies
-        working-directory: ui
-        run: npm audit --audit-level=high
+        if: matrix.python-version == '3.12'
+        shell: pwsh
+        run: ./scripts/audit-npm.ps1
       - name: Audit locked Python dependencies
+        if: matrix.python-version == '3.12'
         shell: pwsh
         run: |
           python -m pip install pip-audit
-          uv export --locked --extra full --no-emit-project --output-file requirements.txt --quiet
-          pip-audit --vulnerability-service osv -r requirements.txt --disable-pip --no-deps
+          ./scripts/audit-python.ps1
+      - name: Audit Rust dependencies
+        if: matrix.python-version == '3.12'
+        shell: pwsh
+        run: |
+          cargo install cargo-audit --locked
+          cargo audit --file ui/src-tauri/Cargo.lock
+      - name: Generate dependency and asset SBOMs
+        if: matrix.python-version == '3.12'
+        shell: pwsh
+        run: ./scripts/generate-sbom.ps1
+      - name: Upload verification SBOMs
+        if: matrix.python-version == '3.12'
+        uses: actions/upload-artifact@v4
+        with:
+          name: halo-sbom
+          if-no-files-found: error
+          path: .tmp/sbom/*.cdx.json

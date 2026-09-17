@@ -1,6 +1,15 @@
 # Patterns
 _Established code patterns and conventions for this project._
 
+## Checkpoint access stays behind the compatibility adapter - 2026-09-17
+Use `brain/brain/checkpoints.py::CheckpointStore` for saver lifecycle, graph
+compilation, snapshots, updates, resumes, pending-interrupt discovery, and
+retention. `graph.py` must not reach into saver connections or checkpoint SQL.
+The two SQL-dependent operations are isolated in the adapter and guarded by a
+startup schema check so a pinned-upstream drift fails actionably. Keep the
+checkpoint itself as the sole authority for resumable approvals; do not add a
+second persisted pending set that can diverge across a crash.
+
 ## Ignore concrete local artifacts, never security-related words - 2026-08-03
 Use repository-root rules for local agent state (`/.agents/`, `/.claude/`, `/.codex/`) and concrete patterns for credentials, databases/WAL files, session data, caches, test reports, logs, and crash/temp output. Never use a broad rule such as `*secret*`: it hides legitimate new source and tests like `secrets_store.py` or `test_secrets.py`. Keep dependency lockfiles and PyInstaller `.spec` files trackable because reproducible installs and the Phase 3c packaging prototype depend on them. Example: root `.gitignore`.
 

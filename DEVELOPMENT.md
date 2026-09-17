@@ -8,7 +8,7 @@ Halo is three processes: `ui` (Tauri + React, the parent), `brain` (Python), and
 ui/      Tauri + Vite + React + TypeScript desktop app
 brain/   Python package (brain/__main__.py) — LangGraph agent loop + WS server
 voice/   Python package (voice/__main__.py) — authenticated idle sidecar; real voice is Phase 3
-shared/  IPC contract source of truth (JSON descriptor) + the TS/Python drift check
+shared/  protocol gates, packaging checks, and the TS/Python contract drift check
 ```
 
 Phases 0, 1, and 2 are complete (declared 2026-08-01), including the Phase 2
@@ -36,6 +36,12 @@ and embedding dependencies; `full` includes both. Parsers load only when needed.
 Installed semantic dependencies do not imply a ready embedding model.
 Official desktop builds must validate the full profile.
 
+LangGraph checkpoint persistence is owned by `brain/brain/checkpoints.py`.
+Callers use its lifecycle, compile, state, resume, interrupt-enumeration, and
+pruning methods rather than touching saver internals or checkpoint tables.
+The adapter validates the pinned SQLite schema at startup and fails with an
+actionable compatibility error instead of silently accepting an upstream drift.
+
 Core memory uses built-in SQLite FTS5/BM25. Set `HALO_SEMANTIC=off` to force
 lexical operation without altering unchanged stored vectors, or
 `HF_HUB_OFFLINE=1` to allow cached models but prohibit downloads. Settings
@@ -48,6 +54,21 @@ For pip consumers, export the selected profile with
 then `python -m pip install --require-hashes -r requirements.txt` and
 `python -m pip install --no-deps -e .`. The export is derived, not another lock.
 Regenerate with `uv lock` and review dependency changes.
+
+Supply-chain checks are first-class repository gates:
+
+```powershell
+./scripts/check-locks.ps1
+./scripts/audit-python.ps1
+./scripts/audit-npm.ps1
+cargo audit --file ui/src-tauri/Cargo.lock
+./scripts/generate-sbom.ps1
+```
+
+The audit wrappers retry registry/service failures and distinguish an unavailable
+audit from a reported vulnerability. SBOM generation writes CycloneDX JSON under
+`.tmp/sbom`, reports unknown license metadata for human review, and rejects the
+repository's explicitly disallowed strong-copyleft/server-side-license set.
 
 The development and verification launchers prefer the repository's
 `.venv\Scripts\python.exe` (`.venv/bin/python` on POSIX). Every candidate must

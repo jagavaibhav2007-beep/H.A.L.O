@@ -1,28 +1,39 @@
 # Memory
 _Current project state, active goals, and key context._
 
-## 2026-09-14 dependency audit resume point (not merged)
+## 2026-09-17 dependency audit resume point (not merged)
 
 - Branch `codex/dependency-framework-audit`, isolated worktree
   `.worktrees/dependency-framework-audit`; main checkout is preserved. Follow
   `AUDIT_EXECUTION_PLAN.md` and the user's `DEPENDENCY_FRAMEWORK_AUDIT.md`.
-- Commits `e8ad7dc`, `8c2f77f`, `d4c5fea` implement PDF containment, one root
-  Python distribution/lock/profiles, and the full frozen backend. Independent
-  review found a read-only Git launch sanitation gap; fix round 1 is active.
-- Lexical memory/schema6 and contract1.6 diagnostics are implemented but
-  uncommitted and under independent review. Focused memory, protocol and UI
-  tests pass. Real pinned model and cached-only relevance smoke passed on
-  2026-09-09; weights are only in the ignored test cache, not the installer.
-- Full integration gate passed 2026-09-14: all Python/Voice suites, contract
-  mirrors, UI self-checks, 94 UI tests/build, 13 Rust tests and all phase gates.
-  Durable output: `.tmp/memory-verification.log`. Independent memory review
-  then found a decomposed-Unicode query mismatch and a premature initial
-  last-retrieval label; follow-up fixes and scoped review remain required.
-- Next: finish/review packaging fix and memory, then checkpoint adapter and
-  conditional LangGraph decision, governance/upgrades/SBOM, final artifact
-  rebuild and requirement-by-requirement verification. Project license choice
-  is deferred by the user; no merge, publish, install, signing or credential
-  changes are implied. Native clean-machine acceptance remains unverified.
+- Commits `e8ad7dc`, `8c2f77f`, `d4c5fea`, `bd3af1e`, and `630ba73` implement
+  PDF containment, one root Python distribution/lock/profiles, the full frozen
+  backend, lexical memory, and frozen read-only Git environment sanitation.
+- Lexical memory/schema6 and contract1.6 diagnostics are implemented. The
+  decomposed-Unicode query and premature startup retrieval label found in review
+  now have focused regression tests and fixes. Real pinned model and cached-only
+  relevance smoke passed on 2026-09-09; weights are only in the ignored test
+  cache, not the installer.
+- Final full integration gate passed 2026-09-17: all Python/Voice suites,
+  34-schema contract sync, supply-chain helpers, five UI self-checks, 94 UI
+  tests/build, 13 Rust tests and all phase gates. The final frozen backend also
+  passed authenticated PDF/Git/Voice/restart checks, and an unsigned NSIS
+  installer was built without installing or publishing it.
+- Checkpoint Option A is implemented through `brain/brain/checkpoints.py`; all
+  saver lifecycle and intentional schema coupling now sit behind one validated
+  adapter. Option B is deferred pending conversion, idempotency/rollback and
+  measured-benefit evidence. Dependency governance, CI matrix, retried audits,
+  SBOM/license policy and release documentation are implemented.
+- Supply-chain evidence: lock drift passed; Python audit found no vulnerability;
+  npm has no high-severity finding (two moderate Vitest findings require a major
+  upgrade); Cargo has no vulnerability and seven allowed warnings; generated
+  SBOM policy found no disallowed declaration/path/credential and reported 84
+  unknown declarations for human legal review. Python 3.11 isolated full-profile
+  imports passed.
+- Next: user review/merge decision. Project license choice is deferred by the
+  user; no merge, push, publish, install, signing or credential changes are
+  implied. Clean-machine, signing/antivirus, native visual/NVDA, real-key, and
+  third-party legal acceptance remain external.
 
 - **2026-08-10 user acceptance confirmed on merged `main`.** The user manually verified the batched PDF workflow after the task-runtime/UI changes were merged: folder ingestion completes with one connected assistant response, working/progress feedback is visible, and Stop responds and terminates correctly. The accepted implementation ends at `262e768`; the merged checkout also passed `./dev.ps1 -Verify` with 34 synchronized contract schemas, every Python/Voice suite, five UI self-checks, Vitest 91/91, the production UI build, Rust 11/11, and all Phase 0/1/2 protocol gates.
 
