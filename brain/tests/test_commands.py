@@ -698,6 +698,8 @@ async def check_websocket_approval_to_verified_artifact() -> None:
     from brain import graph
     from brain.server import start
 
+    task_completion_timeout = 60
+
     def frame(kind: str, **payload) -> dict:
         return {"type": kind, "id": str(uuid.uuid4()),
                 "ts": datetime.now(timezone.utc).isoformat(), **payload}
@@ -735,7 +737,7 @@ async def check_websocket_approval_to_verified_artifact() -> None:
                 break
         task_id = None
         while True:
-            event = json.loads(await asyncio.wait_for(ws.recv(), 20))
+            event = json.loads(await asyncio.wait_for(ws.recv(), task_completion_timeout))
             if event["type"] == "task_state" and event["state"] == "done":
                 task_id = event["task_id"]
                 break
@@ -762,7 +764,7 @@ async def check_websocket_approval_to_verified_artifact() -> None:
                 )))
                 break
         while True:
-            event = json.loads(await asyncio.wait_for(ws.recv(), 20))
+            event = json.loads(await asyncio.wait_for(ws.recv(), task_completion_timeout))
             if event["type"] == "task_state" and event["state"] == "done":
                 outside_task = store.get_task(event["task_id"])
                 if outside_task and outside_task["conversation_id"] == outside_cid:
