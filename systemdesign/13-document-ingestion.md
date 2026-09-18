@@ -128,21 +128,20 @@ file.
 | digest cache keyed by content hash | LlamaIndex DocumentSummaryIndex (build-time summaries, query-time routing) | idea only, no library — one SQLite table |
 | condenser as backstop | OpenHands `LLMSummarizingCondenser` (~2× cost cut, no SWE-bench regression) | already exists here as `_maybe_summarize`; unchanged |
 
-**Evaluated and rejected:** pymupdf4llm (**AGPL** — drags this MIT-distributed repo into AGPL obligations; Artifex sells the exit), docling (best PDF quality but ~1GB torch install, CPU-slow — revisit as an optional lazily-installed "deep parse" tier), unstructured (system binaries poppler/tesseract/libreoffice — hostile on Windows), LLMLingua (torch/GPU-heavy, and compressed-degraded prompts hurt small models most — wrong tool), CrewAI-style multi-agent frameworks (topology without benefit at one-call-per-doc scale).
+**Evaluated and rejected:** pymupdf4llm (copyleft/redistribution review is incompatible with the current deferred-license release posture), docling (best PDF quality but ~1GB torch install, CPU-slow — revisit as an optional lazily-installed "deep parse" tier), unstructured (system binaries poppler/tesseract/libreoffice — hostile on Windows), LLMLingua (torch/GPU-heavy, and compressed-degraded prompts hurt small models most — wrong tool), CrewAI-style multi-agent frameworks (topology without benefit at one-call-per-doc scale).
 
 ## What this deliberately does not do
 
 - **No OCR / scanned PDFs.** Future path exists without new design: pypdfium2 already rasterizes pages → send PNG to an OpenRouter vision model, or the optional docling tier. Until then a scanned PDF returns an honest "no extractable text."
 - **No embedding/RAG index by default.** Digests answer most follow-ups; if pointed Q&A over big corpora becomes real, add fastembed chunks (256–512 tokens, top-k 5) into sqlite-vec — the memory system already owns that exact stack. Keep inference outside the SQLite operation lock and use the existing embedder-construction lock so first use cannot block unrelated store operations or race model initialization.
 - **No new IPC frames.** Tools are Brain-internal; `doc_digest` is Tier 1 inside roots under the existing gate. Contract untouched.
-- **`route()` escalation was a one-way latch — since fixed in [14-token-economics](14-token-economics.md) (Track B).** Layer 2 removes the failure that *caused* escalation; but the escalation mechanism itself had no reset path (once a conversation went HEAVY it stayed HEAVY forever), so the "honest fallback" claimed in earlier drafts of this doc was false. Track B1/B2 make escalation decay after a single turn and fire only on quality failures (not transport/5xx/429). Do not rely on escalation as a standing fallback.
+- **Escalation is not a standing fallback.** [14-token-economics](14-token-economics.md) makes it one-shot; document chunking and bounded map/reduce are the primary reliability controls.
 
-## Implementation order
+## Implemented evidence
 
-1. `extract.py` + converters + a plain-assert `test_extract.py` (repo's no-framework idiom). New deps: `mammoth`, `openpyxl`, `markdownify` (~a few MB, pure Python).
-2. `file_read` format-aware + `offset`/`limit` + 8KB cap; update its schema description (it steers the model); trim `run_readonly_cmd` output to head+tail.
-3. Layer 1 eviction in `_prompt_messages` + a phase2_check assertion that prompt size stays bounded across a multi-read turn (reuse the `_tokens` estimator).
-4. `doc_digest` + digest cache table (MigrationLog v3) + phase2_check digest section.
-5. Update mem/ and VERIFY.md; re-run the original 8-file scenario with a real key and compare `spend_update` before/after — the acceptance test is the user's own repro. **Prerequisite:** [14-token-economics](14-token-economics.md) Track C (usage accounting) must be in place first — before it, `spend_update` under-reported multi-round turns by ~4x and omitted background consolidation and `doc_digest` spend entirely, so a before/after on it would have measured the meter, not the fix.
-
-Per the repo's mock rule: `doc_digest` needs a `mock.py` handler before any UI surface exercises it, or the UI hangs waiting for a confirmation that never comes.
+1. `brain/tests/test_extract.py` covers supported formats, bounds, worker cleanup, and hostile inputs.
+2. File-tool tests cover pagination, 8KB reads, bounded command output, and valid structured truncation.
+3. Graph tests cover projection-time tool-result stubbing without checkpoint mutation.
+4. `doc_digest` uses schema-v3 content-hash caching and is exercised through `shared/phase2_check.py`, including batched outcomes and one conversation-visible continuation.
+5. The mock Brain has a matching handler so UI-only development never waits on a real-only frame path.
+6. The remaining real-key cost comparison is tracked in `VERIFY.md`; provider usage accounting is already implemented by [14-token-economics](14-token-economics.md).

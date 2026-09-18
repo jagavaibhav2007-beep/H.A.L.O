@@ -4,7 +4,7 @@ Companion to [Halo-PRD.md](../Halo-PRD.md). This folder holds one design doc per
 
 ## Process model
 
-Halo runs as **three resident processes** on the laptop plus local stores. Nothing is a server you dial into; it's an app.
+Halo's process contract is **three resident processes** on the laptop plus local stores. The UI and Brain are functional today; the Voice process currently provides authenticated, reconnecting transport only, with its real audio pipeline scheduled for Phase 3c. Nothing is a server you dial into; it's an app.
 
 ```
 ┌────────────────────────── LAPTOP ──────────────────────────┐
@@ -12,27 +12,29 @@ Halo runs as **three resident processes** on the laptop plus local stores. Nothi
 │  UI PROCESS ◄──WebSocket──► BRAIN PROCESS ◄──WS──► VOICE     │
 │  Tauri+React               Python·LangGraph        WORKER    │
 │  (glass UI, panels,        (control loop,          Python·   │
-│   approval prompts)         router, gate,          Pipecat   │
-│                             tools, memory)         +openWW    │
+│   approval prompts)         router, gate,          transport │
+│                             tools, memory)         today;    │
+│                                                   audio 3c   │
 │                                   │                          │
 │              ┌────────────────────┼───────────────────┐      │
 │              ▼                    ▼                    ▼      │
-│   SQLite + sqlite-vec      skills/*.md         OS keystore    │
-│   (memory, tasks,          (self-made          (API keys)    │
-│    activity log)            skills)                          │
+│   SQLite FTS5 + optional   skills/*.md         OS keystore    │
+│   sqlite-vec               (self-made          (API keys)    │
+│   (memory, tasks,           skills)                          │
+│    activity log)                                            │
 └─────────────────────────────────────────────────────────────┘
        │ cloud egress (only these leave the machine)
        ▼
-  OpenRouter (LLM + Whisper STT) · Deepgram (Aura TTS) · MCP servers · Codex/Claude CLIs
+  OpenRouter (LLM today; optional STT later) · future TTS/MCP · Codex/Claude CLIs
 ```
 
 | Process | Responsibility | Talks to |
 |---|---|---|
 | **UI** | Render floating→expandable window and all panels; show approvals, activity feed, memory/task/skill views | Brain (WebSocket) |
 | **Brain** | The agent. LangGraph control loop, model routing, permission gate, tool execution, memory, skills, task state | UI, Voice, OpenRouter, tools, MCP, CLIs |
-| **Voice** | Wake word → capture → STT → hand text to Brain → speak reply via TTS; barge-in/interruption | Brain (WebSocket), OpenRouter STT, Deepgram TTS |
+| **Voice** | Today: authenticated sidecar transport and reconnect. Phase 3c: wake word → capture → STT → Brain → TTS with barge-in | Brain (WebSocket); future local/cloud speech providers |
 
-Processes communicate over **local WebSocket** (loopback only). If Brain dies, UI shows "reconnecting"; Voice buffers the last utterance.
+Processes communicate over **local WebSocket** (loopback only). If Brain dies, UI shows "reconnecting" and Voice re-reads the new session endpoint before reconnecting. Utterance buffering begins with the real audio pipeline.
 
 ## The control loop (LangGraph)
 
@@ -52,9 +54,9 @@ perceive → route model → plan → [permission gate] → execute tool → che
 | Permission gate | [04-permissions](04-permissions.md) | Single choke point; Tier 3 → `interrupt()` |
 | Memory | [03-memory](03-memory.md) | 3 tiers: session / curated beliefs / raw log; decay + auto-correct |
 | Model router | see techstack | Light model default, escalate to heavy on reasoning gaps |
-| Skill lifecycle | [08-self-improvement](08-self-improvement.md) | Frequency → generate → sandbox-eval → activate/retire |
-| Control lanes | [05-computer-control](05-computer-control.md) | Fast / Takeover / Sandbox, chosen per task |
-| IPC contract & lifecycle | [11-ipc-contract](11-ipc-contract.md) | canonical WS schema, process launch/auth, concurrency, cancellation — **the Phase-1 build target** |
+| Skill lifecycle | [08-self-improvement](08-self-improvement.md) | Planned: frequency → generate → sandbox-eval → activate/retire |
+| Control lanes | [05-computer-control](05-computer-control.md) | Lane 1 implemented; Takeover/Sandbox planned |
+| IPC contract & lifecycle | [11-ipc-contract](11-ipc-contract.md) | canonical WS schema, process launch/auth, concurrency, cancellation |
 
 ## Design principles
 
@@ -63,8 +65,8 @@ perceive → route model → plan → [permission gate] → execute tool → che
 3. **Fast path by default.** Programmatic tools before GUI automation; light model before heavy; escalate only on a clear gap.
 4. **Everything is inspectable.** Activity log, memory, and skills are all files/rows the user can view and undo/edit.
 
-## Build phases (from PRD §13)
+## Build status (from PRD §13)
 
-1. **UI shell** — the three-process skeleton with mocked Brain responses; all panels render.
-2. **Backend spine** — real Brain: chat + memory + permission gate + activity log.
-3. **Heavy systems** — voice, browser, GUI lanes, coding orchestration, self-improvement.
+1. **UI shell** — complete.
+2. **Backend spine** — complete, including durable tasks, document ingestion, and memory retrieval.
+3. **Heavy systems** — underway: managed-command and frozen-backend foundations are implemented; coding adapters, real voice, browser, GUI lanes, integrations, and self-improvement remain.

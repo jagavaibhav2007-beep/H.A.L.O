@@ -1,12 +1,12 @@
 # System Design: IPC Contract & Process Lifecycle
 
-The canonical WebSocket message schema between the three processes, plus who launches what. **This doc is the Phase-1 build target** — the UI shell and mocked Brain are built against exactly these shapes.
+The canonical WebSocket message schema between the three processes, plus who launches what. The UI, real Brain, mock Brain, and Voice transport use these shapes; `shared/check_contract_sync.py` verifies the hand-mirrored Python and TypeScript runtime specs.
 
 ## Process lifecycle
-- **Tauri (UI process) is the parent.** On app start it spawns Brain and Voice as **sidecar processes** (packaged Python — PyInstaller or equivalent; a build-time concern, noted in [techstack/00](../techstack/00-stack-summary.md)).
+- **Tauri (UI process) is the parent.** In development it spawns Brain and Voice from source (`python -m brain` / `python -m voice`). Release builds install one frozen `halo-backend` external binary and launch its Brain or Voice mode. The build and layout are documented in [`packaging/README.md`](../packaging/README.md).
 - **Port:** Brain binds a random free loopback port and writes `{port, token}` to a user-only file (`%LOCALAPPDATA%\Halo\session.json`). UI and Voice read it to connect. No hard-coded ports.
 - **Auth:** every WS connection's first frame is `{type:"hello", token}` — the per-session random token from that file. Wrong/missing token → connection dropped; success → Brain sends `hello_ack`. Clients must not send or flush application messages until that acknowledgement arrives. This closes the "any local process can drive the Brain or approve its own Tier-3 gates" hole; the permission gate is only a real choke point if the transport is authenticated.
-- **Supervision:** Tauri watches sidecar exit; restarts with backoff (1s/5s/30s, then surface error state in UI). Brain death → UI "reconnecting", inputs queued locally; Voice buffers the last utterance.
+- **Supervision:** Tauri watches sidecar exit; restarts with backoff (1s/5s/30s, then surface error state in UI). Brain death → UI "reconnecting", inputs queued locally; Voice re-reads `session.json` and reconnects. Utterance buffering begins with the Phase 3c audio pipeline.
 - **Browser development adapter:** `dev.ps1 -Browser` starts a tracked real Brain and enables a loopback-only Vite endpoint that fresh-reads `session.json` for the web UI. It is disabled by default, sends `Cache-Control: no-store`, and does not change the Brain endpoint or production Tauri process model.
 
 ## Message envelope

@@ -1,6 +1,8 @@
 # System Design: Voice
 
-Real-time spoken conversation. A separate process (Pipecat) that feeds the same Brain as chat.
+Status: **transport foundation implemented; audio pipeline planned for Phase 3c.** The current Voice sidecar authenticates to Brain and reconnects in-process after Brain restarts. It does not yet capture audio, detect a wake word, transcribe, synthesize speech, or barge in.
+
+This document defines the target real-time spoken-conversation design: a separate Pipecat process that feeds the same Brain as chat.
 
 ## Responsibility
 - Detect the wake word "Halo" on-device, capture speech, transcribe, hand text to the Brain, speak the reply, handle barge-in.
@@ -39,3 +41,5 @@ mic → openWakeWord ("Halo") → VAD (speech boundaries)
 - **STT and TTS run on-device** (faster-whisper, Kokoro) — audio never leaves the machine during local inference.
 - Cloud STT/TTS are fallback only if local models are unavailable; audio leaves the machine only as a fallback, not by default.
 - See [techstack/02-voice](../techstack/02-voice.md).
+
+Until this pipeline ships, UI mic/wake controls and spoken-approval behavior must be presented as unavailable or planned, never as functioning audio controls.

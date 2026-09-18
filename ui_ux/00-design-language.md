@@ -46,4 +46,4 @@ Semantic tokens only — no raw hex in components. Dark mode is designed, not in
 
 ## Voice of the interface (copy rules)
 - Halo speaks first person, one sentence, plain: "I need your OK to send this email." Never jargon ("Tier-3 interrupt raised").
-- Errors state cause + a way forward: "Deepgram is unreachable — I'll show replies as text for now."
+- Errors state cause + a way forward: "Voice replies are unavailable — I'll show replies as text for now."

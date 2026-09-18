@@ -2,6 +2,8 @@
 
 The supervision experience for the three lanes, browser runs, and coding agents. Sources: [systemdesign/05-computer-control](../systemdesign/05-computer-control.md), [06-browser](../systemdesign/06-browser.md), [07-coding-orchestration](../systemdesign/07-coding-orchestration.md).
 
+Status: Lane-1 task progress/log supervision is implemented. Browser views, coding-agent-specific presentation, Takeover, Sandbox, and live desktop streaming describe future Phase 3 capability states.
+
 ## The lane chip (status strip, always visible during a task)
 - 🟦 **Fast** — "working programmatically"; nothing moves on your screen.
 - 🟨 **Takeover** — "driving your mouse"; the loudest state in the app.

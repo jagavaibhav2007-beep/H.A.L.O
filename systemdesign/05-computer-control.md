@@ -2,6 +2,8 @@
 
 How Halo acts on the machine, and the three-lane model for *how* it acts.
 
+Status: **Lane 1 files, documents, and managed commands are implemented.** App focus, Lane 2 GUI takeover, vision fallback, live desktop streaming, and Lane 3 sandbox execution remain Phase 3 work.
+
 ## Capabilities
 - **Files:** inspect, create, edit, move, organize — via native filesystem calls (Tier 1–2 per [permissions](04-permissions.md)).
 - **Commands:** run installed CLIs or generated Python/PowerShell as bounded, durable Lane-1 tasks. Simple file/folder work still uses typed file tools.

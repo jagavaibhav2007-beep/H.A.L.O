@@ -2,13 +2,15 @@
 
 Drive the user's real, signed-in Chrome. A Lane-1 (programmatic) tool, not pixel-clicking.
 
+Status: **planned Phase 3b capability.** No browser worker, dedicated profile, Playwright task path, or playbook runtime is active yet.
+
 ## Responsibility
 - Navigate, read pages, fill forms, and act on the web **as the user** (their logins), under the browser hard rule.
 
 ## Mechanism
 - **Playwright connected over CDP** to a Chrome launched with the user's profile + a debug port.
 - Uses a **dedicated Halo Chrome window** on that profile (not hijacking an already-open window) to avoid conflicts.
-- **Known constraint:** Chrome 136+ blocks `--remote-debugging-port` on the *default* user-data-dir. Plan: a **dedicated Halo profile** (copy of the user's profile, or a fresh one the user signs into once) launched with the debug port. One-time login cost; sessions then persist in that profile.
+- **Known constraint:** Chrome 136+ blocks `--remote-debugging-port` on the *default* user-data-dir. Plan: a **fresh dedicated Halo profile** that the user signs into once, launched with the debug port. Halo never copies or silently attaches to the default profile.
 
 ```
 Brain browser tool → Playwright(CDP) → Chrome(user profile) → page
@@ -37,7 +39,7 @@ task arrives
 
 **Playbooks (the warm path)**
 - First successful run of a task shape is recorded as a **playbook**: an ordered action list keyed by `hash(domain, task_template)`. Steps store **role + accessible name** (e.g. `button "Submit order"`), not brittle CSS/XPath.
-- Replays execute directly through Playwright — **zero LLM calls**. Cache-hit runs drop from ~$0.05–$1.00 and 30–120s to ~$0 and 3–10s (browser-use's published numbers for this exact pattern).
+- Replays execute directly through Playwright — **zero LLM calls**. Measure latency and cost against Halo's own cold path rather than importing another framework's benchmark.
 - A playbook **is a skill** — it lives in the skills registry and inherits everything from [08-self-improvement](08-self-improvement.md): success-rate tracking, auto-retirement (<50% over ≥5 uses), the skills panel, notify-on-create.
 
 **Self-healing (the grounding path)**

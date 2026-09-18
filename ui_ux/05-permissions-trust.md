@@ -21,8 +21,8 @@ Anchored bottom-center of the current view (or inline in chat when the task live
 └──────────────────────────────────────┘
 ```
 - **Approve** = primary blue. **Deny** = ghost, never red (denying is safe, not destructive). **Edit** opens the args inline for correction before approving.
-- **Money / irreversible-external** variants: `--destructive` red border, the sentence states the amount/consequence in bold, **voice approval disabled** — click only (user decision). A 700ms hold-to-approve on the button prevents reflex clicks.
-- Card waits forever; the task stays checkpointed. Saying "stop" cancels it as an implicit deny (per [IPC rules](../systemdesign/11-ipc-contract.md)) and the card vanishes.
+- **Money / irreversible-external** variants: `--destructive` red border, the sentence states the amount/consequence in bold, **voice approval disabled** — click only (user decision). A 700ms hold-to-approve on the button prevents reflex clicks. All approvals are click-driven until Phase 3c voice is installed.
+- Card waits forever; the task stays checkpointed. A typed stop works today; after Phase 3c, saying "stop" follows the same implicit-deny path (per [IPC rules](../systemdesign/11-ipc-contract.md)) and the card vanishes.
 
 ## Floating companion approval
 

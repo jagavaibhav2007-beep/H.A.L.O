@@ -8,7 +8,7 @@ The default main view. Behavior source: [systemdesign/01-chat](../systemdesign/0
 
 ## What makes it Halo (not a chatbot)
 - **Work is visible inline:** when a reply involved actions, a slim "what I did" row sits under the message — tool icons + one-line summary. Clicking expands the exact activity entries (from the [Activity feed](06-watching-halo-work.md)) without leaving chat.
-- **Voice and text share this thread.** Spoken turns appear here with a small mic glyph; the live transcript materializes as ghost text while you speak, solidifying when STT finalizes ([04-voice](04-voice.md)).
+- **Voice and text share this thread when Phase 3c voice is installed.** Spoken turns appear here with a small mic glyph; the live transcript materializes as ghost text while you speak, solidifying when STT finalizes ([04-voice](04-voice.md)).
 - **Approval cards appear inline** at the point in the conversation where the task paused — the chat tells the story of the pause and the resume.
 
 ## States

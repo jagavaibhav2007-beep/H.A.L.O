@@ -2,6 +2,8 @@
 
 Prefer authenticated APIs/MCP servers; fall back to browser/GUI automation when none exists.
 
+Status: **planned capability.** The official MCP client, registration/health model, imported-tool classification, and external-service adapters are not implemented.
+
 ## Responsibility
 - Give Halo real tool access to external services (email, calendar, notes, etc.) through the cleanest available channel.
 

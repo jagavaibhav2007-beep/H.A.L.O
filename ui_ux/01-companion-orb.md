@@ -2,6 +2,8 @@
 
 Halo's face — a small glass capsule, on screen whenever Halo runs (user decision). 95% of the relationship happens here. Behavior source: [systemdesign/02-voice](../systemdesign/02-voice.md), [10-ui](../systemdesign/10-ui.md).
 
+The capsule, task chips, connection state, and floating approvals are implemented. Voice-specific orb states below describe the Phase 3c target and must not imply that audio is currently active.
+
 **Supersedes the orb-only design.** The original companion was a bare glass circle whose colour/glow encoded one state at a time. It was pretty and useless: you could not tell what Halo was doing or what needed you without opening the whole workspace. The companion is now a **capsule** — the orb survives as its centre, doing the one job it was good at (voice + narration), with status chips flanking it.
 
 ## Anatomy
@@ -43,7 +45,7 @@ Every state also reads via icon/text, never colour alone (reduced-motion and col
 - **Click a chip** → opens the [workspace](02-workspace.md) deep-linked to that view (approval chip → the approval; task chip → tasks).
 - **Click the capsule body** → expands into the workspace at the last view (250ms scale+fade from the capsule — spatial continuity).
 - **Right-click** → quick menu: Mute mic · Pause all tasks · Open workspace · Quit.
-- **Voice needs no interaction** — say "Halo…" from anywhere; the orb acknowledges while collapsed.
+- **When Phase 3c voice is available**, saying "Halo…" from anywhere needs no click; the orb acknowledges while collapsed.
 - Press-scale 0.97 on tappable chips; hover raises chip contrast.
 
 ## Floating approvals
