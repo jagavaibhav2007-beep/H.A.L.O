@@ -704,6 +704,13 @@ async def check_websocket_approval_to_verified_artifact() -> None:
         return {"type": kind, "id": str(uuid.uuid4()),
                 "ts": datetime.now(timezone.utc).isoformat(), **payload}
 
+    def fail_for_terminal_task(event: dict, label: str) -> None:
+        row = store.get_task(event["task_id"])
+        result = json.loads(row["result_json"]) if row and row.get("result_json") else None
+        raise AssertionError(
+            f"{label} task ended as {event['state']}: {event.get('reason')}; result={result}"
+        )
+
     managed, token = await start()
     port = managed.sockets[0].getsockname()[1]
     ws = await websockets.connect(f"ws://127.0.0.1:{port}")
@@ -740,7 +747,7 @@ async def check_websocket_approval_to_verified_artifact() -> None:
             event = json.loads(await asyncio.wait_for(ws.recv(), task_completion_timeout))
             if event["type"] == "task_state":
                 if event["state"] in {"failed", "stopped"}:
-                    raise AssertionError(f"script task ended as {event['state']}: {event.get('reason')}")
+                    fail_for_terminal_task(event, "script")
                 if event["state"] == "done":
                     task_id = event["task_id"]
                     break
@@ -770,7 +777,7 @@ async def check_websocket_approval_to_verified_artifact() -> None:
             event = json.loads(await asyncio.wait_for(ws.recv(), task_completion_timeout))
             if event["type"] == "task_state":
                 if event["state"] in {"failed", "stopped"}:
-                    raise AssertionError(f"outside-root task ended as {event['state']}: {event.get('reason')}")
+                    fail_for_terminal_task(event, "outside-root")
                 if event["state"] == "done":
                     outside_task = store.get_task(event["task_id"])
                     if outside_task and outside_task["conversation_id"] == outside_cid:
