@@ -4,7 +4,7 @@ No test framework -- plain asyncio + assert, mirrors brain/tests/test_server.py.
 Run with:
     python voice/tests/test_client.py
 
-Requires `pip install -e ../brain` from voice/'s environment (see DEVELOPMENT.md)
+Requires the root halo-local-assistant distribution (see DEVELOPMENT.md)
 so both `brain.server` (to stand up an in-process Brain) and `voice` are importable.
 """
 

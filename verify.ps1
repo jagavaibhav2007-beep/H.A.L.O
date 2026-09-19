@@ -54,6 +54,13 @@ Invoke-VerificationStep `
     -Arguments @("shared/check_contract_sync.py")
 
 Invoke-VerificationStep `
+    -Label "Supply-chain helper behavior" `
+    -WorkingDirectory $root `
+    -Command $python.Command `
+    -PrefixArguments $python.Arguments `
+    -Arguments @("shared/supply_chain_check.py")
+
+Invoke-VerificationStep `
     -Label "Browser launcher environment" `
     -WorkingDirectory $root `
     -Command "powershell" `

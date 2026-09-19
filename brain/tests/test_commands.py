@@ -621,11 +621,11 @@ async def check_lease_boundaries_and_verification_limit() -> None:
     verify_entered, verify_release = threading.Event(), threading.Event()
     original_verify = commanding._verify_artifact
 
-    def blocked_verify(item, *args):
+    def blocked_verify(item, *args, **kwargs):
         if item.path == verify_target and not verify_entered.is_set():
             verify_entered.set()
             verify_release.wait(5)
-        return original_verify(item, *args)
+        return original_verify(item, *args, **kwargs)
 
     commanding._verify_artifact = blocked_verify
     first_verify = asyncio.create_task(
@@ -698,9 +698,18 @@ async def check_websocket_approval_to_verified_artifact() -> None:
     from brain import graph
     from brain.server import start
 
+    task_completion_timeout = 60
+
     def frame(kind: str, **payload) -> dict:
         return {"type": kind, "id": str(uuid.uuid4()),
                 "ts": datetime.now(timezone.utc).isoformat(), **payload}
+
+    def fail_for_terminal_task(event: dict, label: str) -> None:
+        row = store.get_task(event["task_id"])
+        result = json.loads(row["result_json"]) if row and row.get("result_json") else None
+        raise AssertionError(
+            f"{label} task ended as {event['state']}: {event.get('reason')}; result={result}"
+        )
 
     managed, token = await start()
     port = managed.sockets[0].getsockname()[1]
@@ -735,10 +744,13 @@ async def check_websocket_approval_to_verified_artifact() -> None:
                 break
         task_id = None
         while True:
-            event = json.loads(await asyncio.wait_for(ws.recv(), 20))
-            if event["type"] == "task_state" and event["state"] == "done":
-                task_id = event["task_id"]
-                break
+            event = json.loads(await asyncio.wait_for(ws.recv(), task_completion_timeout))
+            if event["type"] == "task_state":
+                if event["state"] in {"failed", "stopped"}:
+                    fail_for_terminal_task(event, "script")
+                if event["state"] == "done":
+                    task_id = event["task_id"]
+                    break
         task = store.get_task(task_id)
         assert task and json.loads(task["result_json"])["artifacts"][0]["status"] == "valid"
         assert source not in task["args_json"] and target.read_bytes().startswith(b"%PDF-")
@@ -762,12 +774,15 @@ async def check_websocket_approval_to_verified_artifact() -> None:
                 )))
                 break
         while True:
-            event = json.loads(await asyncio.wait_for(ws.recv(), 20))
-            if event["type"] == "task_state" and event["state"] == "done":
-                outside_task = store.get_task(event["task_id"])
-                if outside_task and outside_task["conversation_id"] == outside_cid:
-                    assert json.loads(outside_task["result_json"])["exit_code"] == 0
-                    break
+            event = json.loads(await asyncio.wait_for(ws.recv(), task_completion_timeout))
+            if event["type"] == "task_state":
+                if event["state"] in {"failed", "stopped"}:
+                    fail_for_terminal_task(event, "outside-root")
+                if event["state"] == "done":
+                    outside_task = store.get_task(event["task_id"])
+                    if outside_task and outside_task["conversation_id"] == outside_cid:
+                        assert json.loads(outside_task["result_json"])["exit_code"] == 0
+                        break
     finally:
         await ws.close()
         managed.close()

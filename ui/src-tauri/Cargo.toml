@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "H.A.L.O. local desktop AI companion"
 authors = ["Vaibhav"]
 edition = "2021"
+repository = "https://github.com/jagavaibhav2007-beep/H.A.L.O."
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

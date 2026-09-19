@@ -2,6 +2,8 @@
 
 Design: [systemdesign/05-computer-control](../systemdesign/05-computer-control.md). Global stack: [00-stack-summary](00-stack-summary.md).
 
+Status: stdlib file/document and managed-command Lane 1 is implemented; app/GUI/vision/sandbox choices below are planned where noted.
+
 ## Feature-specific
 | Concern | Choice | Notes |
 |---|---|---|

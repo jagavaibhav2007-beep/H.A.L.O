@@ -24,7 +24,9 @@ param(
     [switch]$Verify,
     [switch]$Browser,
     [switch]$Mock,
-    [switch]$WatchNative
+    [switch]$WatchNative,
+    [string]$PythonCommand,
+    [string[]]$PythonArguments = @()
 )
 
 $root = $PSScriptRoot
@@ -47,6 +49,9 @@ if ($Browser -and ($Mock -or $WatchNative -or $Only -ne "all")) {
 }
 
 function Start-Ui {
+    $python = Resolve-PythonLauncher -PythonCommand $PythonCommand -PythonArguments $PythonArguments
+    $previousPython = $env:HALO_PYTHON
+    $previousPythonArguments = $env:HALO_PYTHON_ARGUMENTS
     $createdDevMutex = $false
     $devMutex = [System.Threading.Mutex]::new($true, "Local\HaloDevLauncher", [ref]$createdDevMutex)
     if (-not $createdDevMutex) {
@@ -63,6 +68,8 @@ function Start-Ui {
     }
 
     try {
+        $env:HALO_PYTHON = $python.Command
+        $env:HALO_PYTHON_ARGUMENTS = ConvertTo-Json -InputObject @($python.Arguments) -Compress
         if ($Mock) {
             $env:HALO_MOCK = "1"
         } else {
@@ -72,6 +79,8 @@ function Start-Ui {
         & npm @tauriArgs
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     } finally {
+        $env:HALO_PYTHON = $previousPython
+        $env:HALO_PYTHON_ARGUMENTS = $previousPythonArguments
         Pop-Location
         if ($hadMockEnv) {
             $env:HALO_MOCK = $previousMockEnv
@@ -84,16 +93,24 @@ function Start-Ui {
 }
 
 function Start-Brain {
-    $brainCmd = if ($Mock) { "python -m brain --mock" } else { "python -m brain" }
-    Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$root\brain'; $brainCmd"
+    $python = Resolve-PythonLauncher -PythonCommand $PythonCommand -PythonArguments $PythonArguments
+    Push-Location "$root\brain"
+    try {
+        $arguments = @('-m', 'brain')
+        if ($Mock) { $arguments += '--mock' }
+        Invoke-Python -Launcher $python -Arguments $arguments
+    } finally { Pop-Location }
 }
 
 function Start-Voice {
-    Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$root\voice'; python -m voice"
+    $python = Resolve-PythonLauncher -PythonCommand $PythonCommand -PythonArguments $PythonArguments
+    Push-Location "$root\voice"
+    try { Invoke-Python -Launcher $python -Arguments @('-m', 'voice') }
+    finally { Pop-Location }
 }
 
 function Start-Browser {
-    $python = Resolve-PythonLauncher
+    $python = Resolve-PythonLauncher -PythonCommand $PythonCommand -PythonArguments $PythonArguments
     $logDir = Join-Path ([Environment]::GetFolderPath("LocalApplicationData")) "Halo"
     $sessionPath = Join-Path $logDir "session.json"
     New-Item -ItemType Directory -Path $logDir -Force | Out-Null
@@ -166,7 +183,7 @@ function Start-Browser {
 }
 
 if ($Smoke) {
-    $python = Resolve-PythonLauncher
+    $python = Resolve-PythonLauncher -PythonCommand $PythonCommand -PythonArguments $PythonArguments
     Invoke-Python -Launcher $python -Arguments @("$root\shared\smoke_test.py")
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -178,7 +195,7 @@ if ($Smoke) {
 }
 
 if ($Verify) {
-    & "$root\verify.ps1"
+    & "$root\verify.ps1" -PythonCommand $PythonCommand -PythonArguments $PythonArguments
     exit $LASTEXITCODE
 }
 

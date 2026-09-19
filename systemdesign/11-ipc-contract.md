@@ -1,12 +1,12 @@
 # System Design: IPC Contract & Process Lifecycle
 
-The canonical WebSocket message schema between the three processes, plus who launches what. **This doc is the Phase-1 build target** — the UI shell and mocked Brain are built against exactly these shapes.
+The canonical WebSocket message schema between the three processes, plus who launches what. The UI, real Brain, mock Brain, and Voice transport use these shapes; `shared/check_contract_sync.py` verifies the hand-mirrored Python and TypeScript runtime specs.
 
 ## Process lifecycle
-- **Tauri (UI process) is the parent.** On app start it spawns Brain and Voice as **sidecar processes** (packaged Python — PyInstaller or equivalent; a build-time concern, noted in [techstack/00](../techstack/00-stack-summary.md)).
+- **Tauri (UI process) is the parent.** In development it spawns Brain and Voice from source (`python -m brain` / `python -m voice`). Release builds install one frozen `halo-backend` external binary and launch its Brain or Voice mode. The build and layout are documented in [`packaging/README.md`](../packaging/README.md).
 - **Port:** Brain binds a random free loopback port and writes `{port, token}` to a user-only file (`%LOCALAPPDATA%\Halo\session.json`). UI and Voice read it to connect. No hard-coded ports.
 - **Auth:** every WS connection's first frame is `{type:"hello", token}` — the per-session random token from that file. Wrong/missing token → connection dropped; success → Brain sends `hello_ack`. Clients must not send or flush application messages until that acknowledgement arrives. This closes the "any local process can drive the Brain or approve its own Tier-3 gates" hole; the permission gate is only a real choke point if the transport is authenticated.
-- **Supervision:** Tauri watches sidecar exit; restarts with backoff (1s/5s/30s, then surface error state in UI). Brain death → UI "reconnecting", inputs queued locally; Voice buffers the last utterance.
+- **Supervision:** Tauri watches sidecar exit; restarts with backoff (1s/5s/30s, then surface error state in UI). Brain death → UI "reconnecting", inputs queued locally; Voice re-reads `session.json` and reconnects. Utterance buffering begins with the Phase 3c audio pipeline.
 - **Browser development adapter:** `dev.ps1 -Browser` starts a tracked real Brain and enables a loopback-only Vite endpoint that fresh-reads `session.json` for the web UI. It is disabled by default, sends `Cache-Control: no-store`, and does not change the Brain endpoint or production Tauri process model.
 
 ## Message envelope
@@ -45,7 +45,7 @@ All messages: `{type, id, ts, ...payload}`. `id` is sender-generated (uuid) and 
 | `transcript` | `text, final:bool, conversation_id` | STT partials for live ghost-text; `final:true` coincides with the `user_msg` the Voice worker submits |
 | `spend_update` | `session_usd, month_usd` | Brain accumulates per-call cost (OpenRouter usage fields) into SQLite; feeds the Settings spend view |
 | `settings_state` | `key, status:"set"\|"missing"\|"invalid"\|"unverified"` | per-client reply to `settings_update` (sent only to the client that changed it) and pushed once on a fresh non-mock UI connection with the key's current status; `"unverified"` = stored but not yet confirmed against the provider (e.g. offline at save time) |
-| `capabilities_state` | `voice_input:bool, task_controls:bool, skill_controls:bool, demo_scenarios:bool` | snapshot truth for optional UI controls; the real Brain advertises only implemented capabilities, while the mock enables its scripted demo controls |
+| `capabilities_state` | `voice_input:bool, task_controls:bool, skill_controls:bool, demo_scenarios:bool, docs_pdf?:bool, docs_docx?:bool, docs_xlsx?:bool, docs_html?:bool, memory_retrieval?:"lexical"\|"semantic"\|"recency", semantic_model_ready?:bool, semantic_downloads_allowed?:bool` | snapshot truth for optional UI controls; contract 1.6 adds document and memory diagnostics, refreshed at turn completion/approval. Missing optional fields mean not reported, not unavailable. Retrieval is the process-wide last search mode; dependency presence is not model readiness. The mock retains scripted controls. |
 | `belief_state` | `belief_id, text, kind:"preference"\|"project"\|"workflow"\|"decision"\|"lesson", provenance:"user"\|"inferred", salience, status:"active"\|"archived"\|"superseded", superseded_by?, used_at?` | memory panel cards; active rows are pushed on connect, archived/superseded rows on `memory_query`, and changes as deltas |
 | `belief_deleted` | `belief_id` | confirms permanent deletion of an archived belief |
 | `memory_history_state` | `complete` | marks completion of an on-demand memory history response |

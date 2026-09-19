@@ -26,3 +26,9 @@ The inspectable second brain — beliefs you can read, correct, and delete. Sour
 
 ## Trust rule
 Nothing in memory is hidden, and nothing hard-deletes without you. The panel is the proof behind "autonomous correction is safe."
+
+Runtime retrieval diagnostics live in Settings → Models: last search mode
+(lexical FTS5, local semantic model, or recency with no relevance match), model
+readiness/download policy, and installed document formats. The memory panel's
+belief controls remain unchanged. Lexical results are never labelled semantic;
+an older Brain that omits these diagnostics is shown as not reporting them.

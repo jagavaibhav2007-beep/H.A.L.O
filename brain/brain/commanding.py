@@ -6,7 +6,6 @@ import asyncio
 import codecs
 import hashlib
 import json
-import multiprocessing
 import os
 import re
 import shutil
@@ -44,7 +43,7 @@ _ARTIFACT_LEASES: dict[Path, str] = {}
 
 class _ProcessJob:
     """Windows kill-on-close Job Object; a no-op holder elsewhere."""
-    def __init__(self, pid: int) -> None:
+    def __init__(self, pid: int, memory_bytes: int | None = None) -> None:
         self.handle = None
         if os.name != "nt":
             return
@@ -70,10 +69,18 @@ class _ProcessJob:
 
         kernel = ctypes.WinDLL("kernel32", use_last_error=True)
         kernel.CreateJobObjectW.restype = wintypes.HANDLE
+        kernel.CreateJobObjectW.argtypes = (ctypes.c_void_p, wintypes.LPCWSTR)
         kernel.OpenProcess.restype = wintypes.HANDLE
+        kernel.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        kernel.CloseHandle.argtypes = (wintypes.HANDLE,)
+        kernel.SetInformationJobObject.argtypes = (wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD)
+        kernel.AssignProcessToJobObject.argtypes = (wintypes.HANDLE, wintypes.HANDLE)
         job = kernel.CreateJobObjectW(None, None)
         info = Extended()
         info.BasicLimitInformation.LimitFlags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        if memory_bytes is not None:
+            info.BasicLimitInformation.LimitFlags |= 0x200  # JOB_OBJECT_LIMIT_JOB_MEMORY
+            info.JobMemoryLimit = memory_bytes
         process = kernel.OpenProcess(0x0101, False, pid)  # TERMINATE | SET_QUOTA
         ok = job and process and kernel.SetInformationJobObject(
             job, 9, ctypes.byref(info), ctypes.sizeof(info)
@@ -89,7 +96,9 @@ class _ProcessJob:
     def close(self) -> None:
         if self.handle:
             import ctypes
-            ctypes.WinDLL("kernel32", use_last_error=True).CloseHandle(self.handle)
+            kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel.CloseHandle.argtypes = (ctypes.c_void_p,)
+            kernel.CloseHandle(self.handle)
             self.handle = None
 
     def active_processes(self) -> int:
@@ -109,6 +118,7 @@ class _ProcessJob:
 
         info = Accounting()
         kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.QueryInformationJobObject.argtypes = (wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD, ctypes.c_void_p)
         if not kernel.QueryInformationJobObject(self.handle, 1, ctypes.byref(info), ctypes.sizeof(info), None):
             raise OSError(ctypes.get_last_error(), "could not inspect command process tree")
         return info.ActiveProcesses
@@ -586,47 +596,13 @@ def _clean_scratch(root: Path | None) -> None:
         shutil.rmtree(root, ignore_errors=True)
 
 
-def _pdf_worker(path: str, output) -> None:
+def _pdf_pages(path: Path, deadline: float | None, cancelled=None) -> int:
+    from brain.extract_worker import run_pdf
+    timeout = min(_MAX_PDF_VERIFY_SECONDS, (deadline - time.monotonic()) if deadline else float("inf"))
     try:
-        if os.environ.get("HALO_TEST_PDF_VERIFY_BLOCK") == "1":
-            time.sleep(30)
-        from pypdf import PdfReader
-        output.send((True, len(PdfReader(path).pages)))
-    except Exception as exc:  # noqa: BLE001 - child returns parser failure as data
-        output.send((False, str(exc)))
-    finally:
-        output.close()
-
-
-def _pdf_pages(path: Path, deadline: float | None) -> int:
-    """Parse in a disposable process so malformed PDFs cannot outlive the deadline."""
-    limit = min(deadline or float("inf"), time.monotonic() + _MAX_PDF_VERIFY_SECONDS)
-    receive, send = multiprocessing.get_context("spawn").Pipe(duplex=False)
-    process = multiprocessing.get_context("spawn").Process(
-        target=_pdf_worker, args=(str(path), send), daemon=True,
-    )
-    process.start()
-    send.close()
-    try:
-        remaining = max(0, limit - time.monotonic())
-        if not receive.poll(remaining):
-            raise VerificationLimit()
-        try:
-            ok, value = receive.recv()
-        except EOFError as exc:
-            raise ValueError("PDF verifier exited without a result") from exc
-        if not ok:
-            raise ValueError(value)
-        return int(value)
-    finally:
-        if process.is_alive():
-            process.terminate()
-        process.join(0.5)
-        if process.is_alive():
-            process.kill()
-            process.join(0.5)
-        receive.close()
-        process.close()
+        return run_pdf(path, mode="pages", timeout=timeout, cancelled=cancelled)
+    except TimeoutError as exc:
+        raise VerificationLimit() from exc
 
 
 async def _stop_tree(proc: asyncio.subprocess.Process, job: _ProcessJob) -> None:
@@ -666,7 +642,7 @@ async def _stop_tree(proc: asyncio.subprocess.Process, job: _ProcessJob) -> None
         await asyncio.wait_for(proc.wait(), 1)
 
 
-def _verify_artifact(item: Artifact, deadline: float | None = None) -> dict:
+def _verify_artifact(item: Artifact, deadline: float | None = None, cancelled=None) -> dict:
     result = {"path": str(item.path), "kind": item.kind}
     if not item.path.exists():
         return result | {"status": "missing"}
@@ -685,7 +661,7 @@ def _verify_artifact(item: Artifact, deadline: float | None = None) -> dict:
                 handle.seek(max(0, item.path.stat().st_size - 4096))
                 if b"%%EOF" not in handle.read():
                     raise ValueError("missing PDF trailer")
-            pages = _pdf_pages(item.path, deadline)
+            pages = _pdf_pages(item.path, deadline, cancelled)
             size, mtime, digest = _artifact_mark(item.path, deadline)
             return result | {"status": "valid", "bytes": size, "mtime_ns": mtime,
                              "sha256": digest, "pages": pages}
@@ -770,6 +746,8 @@ async def _run_managed(spec: CommandSpec, decision: Decision, ctx) -> dict:
         if time.monotonic() >= deadline:
             raise VerificationLimit()
         recheck_identity(spec)
+        from halo.freezing import external_argv
+        argv = external_argv(argv, env)
         flags = (subprocess.CREATE_NEW_PROCESS_GROUP | 0x4) if os.name == "nt" else 0  # CREATE_SUSPENDED
         proc = await asyncio.create_subprocess_exec(*argv, cwd=spec.cwd, env=env,
                                                     stdin=asyncio.subprocess.DEVNULL,
@@ -883,7 +861,8 @@ async def _run_managed(spec: CommandSpec, decision: Decision, ctx) -> dict:
         truncated[name] = omitted
     artifacts = []
     for item in spec.artifacts:
-        artifacts.append(await asyncio.to_thread(_verify_artifact, item, deadline))
+        from brain.extract_worker import run_cancellable
+        artifacts.append(await run_cancellable(_verify_artifact, item, deadline, cancelled=ctx.cancelled))
     for index, (item, verified) in enumerate(zip(spec.artifacts, artifacts)):
         current = (verified.get("bytes"), verified.get("mtime_ns"), verified.get("sha256"))
         if item.overwrite and verified["status"] == "valid" and current == baselines[item.path]:

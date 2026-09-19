@@ -23,12 +23,18 @@ user types → UI → WS → Brain graph run
 
 ## State
 - Conversation history: session tier (RAM) during a turn; summarized into curated memory when it contains something durable (see [memory](03-memory.md)).
+- Durable graph state is accessed only through `brain.checkpoints.CheckpointStore`.
+  The adapter owns saver startup/shutdown and all intentional SQLite coupling
+  (open-interrupt enumeration and per-thread retention), validates the pinned
+  schema, and leaves the checkpoint as the sole authority for resumable state.
 - Long chats are **summarized, not truncated blindly**, so context survives without unbounded token cost.
 - Once a span is distilled (into the summary or a belief), it is **dropped from live history** — the same fact never rides into a prompt twice via history *and* memory injection.
 
 ## Failure handling
 - Model/router error → surface a plain message + retry option; never silently drop the turn.
 - Brain disconnect mid-stream → UI marks the message incomplete and offers resume (graph checkpoint still holds state).
+- A checkpoint schema incompatible with the pinned adapter fails startup with a
+  migration-oriented error; H.A.L.O. does not guess at or rewrite unknown layouts.
 
 ## Cost note
 - Most turns route to the **light** model; escalate to heavy only when the router flags reasoning/coding/planning depth. See [techstack/01-chat](../techstack/01-chat.md).

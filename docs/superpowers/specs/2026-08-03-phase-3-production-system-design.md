@@ -1,10 +1,10 @@
 # H.A.L.O. Phase 3 Production System Design
 
-Status: Approved architecture baseline
+Status: Approved future-capability architecture; foundation status reconciled below
 
 Owner: H.A.L.O. maintainers
 
-Last updated: 2026-08-03
+Last updated: 2026-09-18
 
 Scope: Phase 3.0–3f architecture for a durable, cost-efficient, publicly cloneable Windows desktop application.
 
@@ -32,9 +32,11 @@ Production-ready means that an unfamiliar contributor can clone, bootstrap, veri
 - Replacing TaskRuntime with OpenHands, Browser Use, Agent-S, Magentic-UI, Celery, or another orchestrator.
 - A hosted H.A.L.O. control plane or mandatory telemetry service.
 
-## Current-state problems
+## Current foundation and remaining gap
 
-The Phase 0–2 core is mature enough to host Phase 3, but the repository is not yet clone-to-green for a new contributor. Python workers have separate hashed installations, Voice needs an editable Brain installation, Tauri still launches source modules, and the repository has no root onboarding document. The current UI documentation also overstates restart recovery: TaskRuntime reconciles torn tasks truthfully and never blindly replays arbitrary side effects.
+The repository now has root onboarding, one checked-in `uv.lock`, verified `core`/`full`/`dev` Python profiles, dependency admission and SBOM checks, and a frozen full-profile `halo-backend` used by release packaging. Development still launches source modules by design. TaskRuntime and the shared managed-command executor are implemented; TaskRuntime reconciles torn tasks truthfully and never blindly replays arbitrary side effects.
+
+The remaining Phase 3 gap is capability implementation, not foundational dependency packaging: the capability registry, Codex/Claude adapters, MCP, browser worker, real Voice audio pipeline, Windows GUI control, and governed skill loop remain future work. Missing capabilities must continue to degrade honestly.
 
 Phase 3 dependencies can become much larger than the core. Browser frameworks commonly bundle multiple model SDKs and telemetry clients; real-time voice pulls native audio, inference, and model assets; GUI vision can introduce GPU and model requirements. Bundling all of that into the Brain would increase installer size, cold start, CI cost, vulnerability surface, and PyInstaller risk.
 
@@ -116,9 +118,9 @@ Continue the portable `SKILL.md` format. The governed lifecycle is draft, evalua
 
 ## Dependency plan
 
-Adopt a root `uv` workspace with a universal checked-in lock. Brain, Voice, browser, Windows GUI, integrations, and build tools remain separately addressable packages. Production sidecars are built from only their required dependency sets. The current hashed requirements files remain until the workspace lock passes CI parity and clean-machine reproduction.
+The root `pyproject.toml` and universal checked-in `uv.lock` are authoritative. Locked `core`, `full`, and `dev` profiles keep optional native/model dependencies out of the minimal runtime while allowing the frozen release backend to carry the full profile. Future browser, Windows GUI, integration, and Voice additions must enter through these profiles and the dependency-admission checks rather than separate drifting requirement files.
 
-Add the official MCP SDK, Playwright, isolated Voice dependencies, one benchmark-selected UIA binding, and PyInstaller build tooling. Do not add Browser Use, OpenHands, Agent-S, Magentic-UI, a LangChain MCP adapter, or a second task queue as core runtime dependencies.
+PyInstaller build tooling is implemented. Add the official MCP SDK, Playwright, isolated Voice dependencies, and one benchmark-selected UIA binding only with their capability tranche. Do not add Browser Use, OpenHands, Agent-S, Magentic-UI, a LangChain MCP adapter, or a second task queue as core runtime dependencies.
 
 Playwright browser binaries and local speech models are versioned artifacts rather than implicit package-manager side effects. Every new dependency must pass maintenance, license-compatibility, vulnerability, native-wheel, installer-size, cold-start, optionality, and removal review. The final project-license compatibility review remains a Phase 3f gate.
 
@@ -212,9 +214,9 @@ Rollout is tranche-gated. Each capability starts behind an availability flag, pa
 
 ## Phase sequence
 
-### Phase 3.0 — open-source foundation
+### Phase 3.0 — production foundation (mostly implemented)
 
-Create root onboarding and bootstrap, migrate toward the `uv` workspace, add the capability registry and dependency admission gate, implement redacted diagnostics, prove packaged sidecar discovery, and correct stale contract/recovery documentation.
+Root onboarding/bootstrap, the locked Python distribution, dependency admission, SBOM/notices, frozen-backend discovery, and contract/recovery documentation are implemented. The capability registry and its install/repair UI remain to be built alongside the first optional capability that needs them.
 
 Exit: a clean Windows x64 checkout reaches a working text-chat app and full repository gate through documented commands; capability absence is rendered truthfully.
 
@@ -230,9 +232,9 @@ Implement MCP registration/classification, Playwright worker, dedicated browser 
 
 Exit: registered integrations and browser tasks are permission-gated, recover safely and never use a default browser profile implicitly.
 
-### Phase 3c — packaging and real Voice
+### Phase 3c — real Voice on the packaged foundation
 
-Freeze Brain and Voice sidecars, package with Tauri NSIS, test source/packaged path selection, add push-to-talk, local STT/TTS, lazy models and optional wake word.
+The shared frozen backend, Tauri NSIS layout, and source/release path selection are implemented. Add push-to-talk, local STT/TTS, lazy model assets, barge-in, and optional wake word on that foundation.
 
 Exit: installer works without Python, text remains available during Voice failure, and local audio passes privacy/accessibility checks.
 

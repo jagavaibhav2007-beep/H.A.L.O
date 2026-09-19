@@ -111,12 +111,12 @@ async def _recv(ws, timeout: float = 10.0) -> dict:
 
 
 async def _recv_type(ws, msg_type: str, timeout: float = 10.0) -> dict:
-    """Next frame of msg_type, skipping token/spend_update noise (test_gate.py idiom)."""
+    """Next requested frame, allowing contract-validated broadcasts."""
     while True:
         frame = await _recv(ws, timeout)
         if frame["type"] == msg_type:
             return frame
-        assert frame["type"] in ("spend_update", "token"), f"unexpected frame waiting for {msg_type}: {frame}"
+        assert frame["type"] in ("spend_update", "token", "capabilities_state"), f"unexpected frame waiting for {msg_type}: {frame}"
 
 
 async def _drain_snapshot(ws) -> list[dict]:
@@ -172,17 +172,23 @@ async def check_real_chat_turn(port: int, token: str) -> None:
 
         await ws.send(json.dumps(_frame("user_msg", text="ping", conversation_id="p2-chat", source="ui")))
         tokens: list[str] = []
+        diagnostics = None
         while True:
             frame = await _recv(ws)
             if frame["type"] == "token":
                 assert frame["conversation_id"] == "p2-chat", frame
                 tokens.append(frame["text"])
+            elif frame["type"] == "capabilities_state":
+                diagnostics = frame
+                assert frame["memory_retrieval"] in ("lexical", "semantic", "recency"), frame
+                assert isinstance(frame["semantic_model_ready"], bool), frame
             elif frame["type"] == "done":
                 assert frame["conversation_id"] == "p2-chat", frame
                 break
             else:
                 assert frame["type"] == "spend_update", frame
         assert tokens and "ping" in "".join(tokens), tokens
+        assert diagnostics is not None, "turn completed without refreshing retrieval diagnostics"
         # The per-turn spend_update lands right after done and carries the just-
         # finished turn's last_turn_tokens (present even at 0 under the stub).
         after = await _recv(ws)
@@ -345,7 +351,7 @@ async def check_doc_digest(port: int, token: str) -> None:
                 if turn_id and token_text.get(turn_id):
                     completed_content_turns.add(turn_id)
             else:
-                assert frame["type"] in ("spend_update", "task_log"), frame
+                assert frame["type"] in ("spend_update", "task_log", "capabilities_state"), frame
     finally:
         await ws.close()
 

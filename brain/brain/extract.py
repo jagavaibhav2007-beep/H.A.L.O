@@ -13,22 +13,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import mammoth
-import openpyxl
-import pypdfium2 as pdfium
-from markdownify import markdownify
-from pypdf import PdfReader
+from brain.capabilities import require
+from brain.extract_worker import PDF_OUTPUT_BYTES, PDF_PAGE_CAP
 
 # ponytail: per-sheet row cap keeps a whole workbook cheap to page through the
 # chat loop; raise it (or teach doc_digest to page sheets) if a real workflow
 # needs full sheets returned in one call.
 _XLSX_ROW_CAP = 200
-# Same reasoning per sheet and per page. These bound the WORK, not just the
-# output: extraction runs under asyncio.to_thread, which is not cancellable, so
-# a 5000-page PDF would hold a pool thread for the process lifetime with no
-# timeout able to fire. Callers cap the resulting text separately.
+# PDF parsing is worker-only with OS memory/time limits as well as these caps.
 _XLSX_SHEET_CAP = 20
-_PDF_PAGE_CAP = 100
+_PDF_PAGE_CAP = PDF_PAGE_CAP
 # Hard refusal above this. Every converter below reads the whole file into
 # memory, and file_read's caller is Tier 1 inside roots (no approval), so an
 # unbounded read is an unattended OOM of the Brain.
@@ -39,19 +33,43 @@ def _truncation_note(kind: str, cap: int, total: int) -> str:
     return f"\n\n... [truncated at {cap} {kind} of {total} total]"
 
 
+class _OutputLimit(ValueError):
+    pass
+
+
 def _extract_pdf(path: Path) -> str:
+    """Worker-only parser. Call extract_text for the contained public API."""
+    pdfium = require("pypdfium2")
+    PdfReader = require("pypdf").PdfReader
     text = ""
     total = 0
     try:
         pdf = pdfium.PdfDocument(str(path))
         try:
             total = len(pdf)
-            parts = [
-                pdf[i].get_textpage().get_text_range() for i in range(min(total, _PDF_PAGE_CAP))
-            ]
+            parts = []
+            output_bytes = 0
+            for i in range(min(total, _PDF_PAGE_CAP)):
+                page = pdf[i]
+                try:
+                    textpage = page.get_textpage()
+                    try:
+                        if textpage.count_chars() > PDF_OUTPUT_BYTES:
+                            raise _OutputLimit("PDF output limit exceeded")
+                        part = textpage.get_text_range()
+                    finally:
+                        textpage.close()
+                finally:
+                    page.close()
+                output_bytes += len(part.encode("utf-8")) + 2
+                if output_bytes > PDF_OUTPUT_BYTES - 128:
+                    raise _OutputLimit("PDF output limit exceeded")
+                parts.append(part)
         finally:
             pdf.close()
         text = "\n\n".join(parts)
+    except _OutputLimit:
+        raise
     except Exception:
         text = ""  # fall through to the pypdf fallback below
     if not text.strip():
@@ -62,13 +80,19 @@ def _extract_pdf(path: Path) -> str:
                 # locked. Say so, so the remedy (supply the password) is honest.
                 raise ValueError(f"{path.name} is an encrypted/password-protected PDF")
             total = len(reader.pages)
-            text = "\n\n".join(
-                reader.pages[i].extract_text() or "" for i in range(min(total, _PDF_PAGE_CAP))
-            )
+            parts = []
+            output_bytes = 0
+            for i in range(min(total, _PDF_PAGE_CAP)):
+                part = reader.pages[i].extract_text() or ""
+                output_bytes += len(part.encode("utf-8")) + 2
+                if output_bytes > PDF_OUTPUT_BYTES - 128:
+                    raise ValueError("PDF output limit exceeded")
+                parts.append(part)
+            text = "\n\n".join(parts)
         except ValueError:
             raise
-        except Exception:
-            text = ""
+        except Exception as exc:
+            raise ValueError(f"could not parse PDF {path.name}: {exc}") from exc
     if text.strip() and total > _PDF_PAGE_CAP:
         text += _truncation_note("pages", _PDF_PAGE_CAP, total)
     if not text.strip():
@@ -78,12 +102,26 @@ def _extract_pdf(path: Path) -> str:
     return text
 
 
+def _pdf_pages(path: Path) -> int:
+    """Worker-only artifact metadata; never extracts images or remote links."""
+    PdfReader = require("pypdf").PdfReader
+    reader = PdfReader(str(path))
+    if reader.is_encrypted:
+        raise ValueError("encrypted/password-protected PDF cannot be verified")
+    pages = len(reader.pages)
+    if not 0 < pages <= _PDF_PAGE_CAP:
+        raise ValueError(f"PDF page verification limit exceeded ({_PDF_PAGE_CAP} pages)")
+    return pages
+
+
 def _extract_docx(path: Path) -> str:
+    mammoth = require("mammoth")
+    markdownify = require("markdownify").markdownify
     # mammoth's own Markdown writer is deprecated upstream ("generating HTML and
     # using a separate library to convert the HTML to Markdown is recommended");
     # markdownify is already the .html path's converter, so reuse it.
     with path.open("rb") as handle:
-        result = mammoth.convert_to_html(handle)
+        result = mammoth.convert_to_html(handle, external_file_access=False)
     return markdownify(result.value)
 
 
@@ -94,6 +132,7 @@ def _fmt_row(cells: tuple, width: int) -> str:
 
 
 def _extract_xlsx(path: Path) -> str:
+    openpyxl = require("openpyxl")
     wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
     try:
         sections = []
@@ -127,12 +166,12 @@ def _extract_xlsx(path: Path) -> str:
 
 
 def _extract_html(path: Path) -> str:
+    markdownify = require("markdownify").markdownify
     html = path.read_text(encoding="utf-8", errors="replace")
     return markdownify(html)
 
 
 _CONVERTERS = {
-    ".pdf": _extract_pdf,
     ".docx": _extract_docx,
     ".xlsx": _extract_xlsx,
     ".html": _extract_html,
@@ -156,6 +195,12 @@ def extract_text(path: Path) -> str:
             f"{_MAX_BYTES // (1024 * 1024)}MB into memory"
         )
     ext = path.suffix.lower()
+    if ext == ".pdf":
+        from brain.extract_worker import run_pdf
+        try:
+            return run_pdf(path)
+        except TimeoutError as exc:
+            raise ValueError(str(exc)) from exc
     converter = _CONVERTERS.get(ext)
     if converter is not None:
         return converter(path)

@@ -6,7 +6,7 @@ Companion to [systemdesign/14-token-economics.md](../systemdesign/14-token-econo
 
 | concern | choice | why |
 |---|---|---|
-| Per-request token counts | **OpenRouter `usage` fields, already in the response** | `prompt_tokens`, `completion_tokens`, `prompt_tokens_details.cached_tokens`, `completion_tokens_details.reasoning_tokens` come back free on every response with no extra call. `llm.py` currently reads `cost` and discards the rest. |
+| Per-request token counts | **OpenRouter `usage` fields, already in the response** | `llm.py` accumulates prompt, completion, cached, reasoning, and cost fields across every call without an extra provider request. |
 | Token estimation for thresholds | **existing `_tokens()` chars//4** | Already good enough as a safety-net threshold, and a real tokenizer would be *wrong* here — neither `gemma-4` nor `deepseek-v4` uses a `tiktoken` vocabulary. Real counts now come from the provider anyway. |
 | File metadata | **`Path.stat()` (stdlib)** | `st_mtime` + `st_size`. Nothing to install. |
 | Listing sort/cap | **`sorted(..., key=st_mtime, reverse=True)[:limit]`** | Replaces `heapq.nsmallest` by name. At personal folder scale (~10²–10³ entries) a full sort is free; `nsmallest` was solving a problem that does not exist here, and solving it in the wrong direction. |
@@ -34,7 +34,7 @@ Companion to [systemdesign/14-token-economics.md](../systemdesign/14-token-econo
 
 **Zero new dependencies.** Every change is stdlib (`Path.stat`, `sorted`, `json`, `set`) plus response fields already being paid for and thrown away.
 
-## Unverified — measure, do not assume
+## Provider behavior to measure, not assume
 
-- Whether OpenRouter's `google/gemma-4-26b-a4b-it` route does implicit caching at all. The provider caching table lists "Google Gemini 2.5", not Gemma. **Track C1 answers this directly** via `cached_tokens` on a second identical-prefix request. If it is zero, LIGHT-model turns get no cache benefit and the volatile-last ordering (B4) matters only for HEAVY.
-- Per-model pricing and whether `deepseek-v4-pro` emits reasoning tokens — both feed the real cost of the `escalated` latch, and neither was verifiable offline.
+- Whether the configured light-model route reports implicit cache hits. Check `cached_tokens` with a real key rather than inferring behavior from a provider table.
+- Current per-model pricing and whether the configured heavy route reports reasoning tokens. These are external provider properties and belong in dated verification evidence, not hard-coded architecture claims.

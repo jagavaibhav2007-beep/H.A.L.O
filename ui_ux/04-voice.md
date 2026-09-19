@@ -2,6 +2,8 @@
 
 How speaking to Halo *feels*. Pipeline & events: [systemdesign/02-voice](../systemdesign/02-voice.md); orb states: [01-companion-orb](01-companion-orb.md).
 
+Status: **target Phase 3c interaction.** The current app has the Voice sidecar connection/state foundation but no audio capture, wake word, STT, TTS, barge-in, or voice approval. These states must remain disabled or explicitly labelled unavailable until the matching capability is healthy.
+
 ## The loop, from your side
 ```
 you: "Halo"        → orb ripples + chime (heard you)

@@ -38,7 +38,7 @@ tool call → classify → Tier 3
 ```
 
 ## Voice approval (user decision)
-- Tier-3 requests may be approved/denied **by voice** ("approve" / "deny") — **except money or irreversible-external actions** (spend/checkout, account changes): those require a physical click on the approval card, always. Voice announces them but cannot confirm them. UX: [ui_ux/05-permissions-trust](../ui_ux/05-permissions-trust.md).
+- **Target behavior after Phase 3c voice ships:** Tier-3 requests may be approved/denied by voice ("approve" / "deny") except money or irreversible-external actions (spend/checkout, account changes), which always require a physical click. Today approvals are click-driven because the Voice sidecar has no audio pipeline. UX: [ui_ux/05-permissions-trust](../ui_ux/05-permissions-trust.md).
 
 ## Browser hard rule (overrides tiers)
 In the signed-in browser: read/navigate = Tier 1. **Any click that submits, sends, buys, or posts = Tier 3**, always, even inside an approved task. Enforced in the browser tool wrapper, not left to classification.

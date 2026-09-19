@@ -2,6 +2,8 @@
 
 Design: [systemdesign/02-voice](../systemdesign/02-voice.md). Global stack: [00-stack-summary](00-stack-summary.md).
 
+Status: **planned Phase 3c stack.** Only the authenticated, reconnecting Python Voice sidecar exists today; the packages and local model assets below are not yet installed as an active speech pipeline.
+
 ## Feature-specific
 | Concern | Choice | Notes |
 |---|---|---|

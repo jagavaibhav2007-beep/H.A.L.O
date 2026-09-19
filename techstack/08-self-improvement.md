@@ -2,6 +2,8 @@
 
 Design: [systemdesign/08-self-improvement](../systemdesign/08-self-improvement.md). Global stack: [00-stack-summary](00-stack-summary.md).
 
+Status: planned Phase 3e runtime; the existing skill UI/contract does not imply autonomous generation or activation.
+
 ## Feature-specific
 | Concern | Choice | Notes |
 |---|---|---|

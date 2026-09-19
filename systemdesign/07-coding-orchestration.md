@@ -2,6 +2,8 @@
 
 Halo directs Codex/Claude to build, continue, refactor, debug — including improving Halo itself. Lane 1 via CLI.
 
+Status: **shared executor implemented; provider adapters pending.** `command_run` and `script_run` provide the gated, durable subprocess boundary. Codex and Claude discovery/event/resume adapters are the next Phase 3a tranche.
+
 ## Responsibility
 - Brief a coding agent, run it, monitor it, report back what changed. Not by clicking the desktop apps — via their **CLIs**.
 

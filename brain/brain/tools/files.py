@@ -12,10 +12,12 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import os
+import signal
 import shlex
 import shutil
 import subprocess
 import uuid
+from contextlib import suppress
 from datetime import datetime
 from itertools import islice
 from pathlib import Path
@@ -123,16 +125,57 @@ def _uncollide(p: Path) -> Path:
 # ------------------------------------------------------------- read-only ---
 
 
-def _file_read(args: dict) -> str:
+def _run_readonly_process(
+    argv: list[str], *, cwd: Path, env: dict[str, str], timeout: float,
+) -> subprocess.CompletedProcess:
+    """Run one child in a tree-scoped lifetime, including timeout cleanup."""
+    from brain.commanding import _ProcessJob, _resume_process
+
+    flags = (subprocess.CREATE_NO_WINDOW | 0x00000004) if os.name == "nt" else 0
+    process = subprocess.Popen(
+        argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        shell=False, creationflags=flags, start_new_session=os.name != "nt",
+    )
+    job = None
+    try:
+        job = _ProcessJob(process.pid)
+        _resume_process(process.pid)
+        stdout, stderr = process.communicate(timeout=timeout)
+        return subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
+    finally:
+        # Closing the Windows Job kills every still-active descendant. POSIX
+        # commands own a fresh process group, so kill that group even if its
+        # leader has already exited and a background child kept running.
+        if job is not None:
+            job.close()
+        if os.name != "nt":
+            with suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGKILL)
+        if process.poll() is None:
+            with suppress(ProcessLookupError):
+                process.kill()
+        try:
+            process.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            with suppress(ProcessLookupError):
+                process.kill()
+            process.wait()
+
+
+def _file_read(args: dict, text: str | None = None) -> str:
     p = _resolve(args["path"])
     try:
-        text = extract.extract_text(p)
+        if text is None:
+            text = extract.extract_text(p)
     except (ValueError, MemoryError):
         # ValueError: honest "no extractable text"/unsupported-format/too-large
         # error -> the tool error. MemoryError: the file did not fit once, so
         # the raw-read fallback below would only try the same allocation again.
         raise
     except Exception:
+        if p.suffix.lower() == ".pdf":
+            raise  # never decode a failed/uncontained PDF as raw text
         # Extraction library choked on a malformed file -- fall back to the
         # old best-effort raw read rather than losing the file entirely.
         with p.open("rb") as handle:
@@ -169,6 +212,15 @@ def _file_read(args: dict) -> str:
         else:
             body += f"\n\n[showing lines {start + 1}-{end} of {total_lines} total in {p.name}]"
     return body
+
+
+async def _file_read_async(args: dict) -> str:
+    p = _resolve(args["path"])
+    if p.suffix.lower() == ".pdf":
+        from brain.extract_worker import extract_pdf_isolated
+        text = await extract_pdf_isolated(p)
+        return _file_read(args, text)
+    return await asyncio.to_thread(_file_read, args)
 
 
 def _clamp_limit(raw, default: int, cap: int) -> int:
@@ -332,10 +384,9 @@ def _run_cmd(args: dict) -> dict:
     if parts[1] in ("diff", "log"):
         safe_parts.extend(("--no-ext-diff", "--no-textconv"))
     safe_parts.extend(parts[2:])
-    r = subprocess.run(
-        safe_parts, cwd=cwd, capture_output=True, text=True, timeout=10,
-        shell=False, env=git_env,
-    )
+    from halo.freezing import external_argv
+    safe_parts = external_argv(safe_parts, git_env)
+    r = _run_readonly_process(safe_parts, cwd=cwd, env=git_env, timeout=10)
     out = r.stdout
     cap = _CMD_HEAD_CAP + _CMD_TAIL_CAP
     if len(out) > cap:
@@ -708,7 +759,7 @@ _PATH = {"type": "string", "description": "Absolute path, or one starting with ~
 # the fix is to write them here, no codegen.
 
 gate.register(
-    "file_read", _file_read, tier=_path_tier("path", 1),
+    "file_read", _file_read_async, tier=_path_tier("path", 1),
     summary=lambda a: f"I want to read {a['path']}.",
     schema=_schema(
         "Read a file and return its contents as markdown/plain text (extracted "

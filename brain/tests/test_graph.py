@@ -213,7 +213,7 @@ async def check_interrupt(port: int, token: str) -> None:
             # spend_update is a GLOBAL broadcast, so the PREVIOUS check's turn
             # can land one here -- same skip idiom as test_gate.py. Asserting
             # "the very next frame is a token" was a latent race.
-            if frame["type"] == "spend_update":
+            if frame["type"] in ("spend_update", "capabilities_state"):
                 continue
             assert frame["type"] == "token", frame
             seen += 1
@@ -264,7 +264,7 @@ async def check_interrupt_stalled_stream(port: int, token: str) -> None:
         await _send_msg(ws, cid, "please wait forever")
         while True:  # skip a prior turn's global spend_update (see check_interrupt)
             first = json.loads(await asyncio.wait_for(ws.recv(), timeout=2))
-            if first["type"] != "spend_update":
+            if first["type"] not in ("spend_update", "capabilities_state"):
                 break
         assert first["type"] == "token" and first["conversation_id"] == cid, first
         await ws.send(json.dumps(_frame("interrupt", conversation_id=cid)))
@@ -299,6 +299,9 @@ async def check_midstream_error_honesty(port: int, token: str) -> None:
         await _send_msg(ws, cid, "trigger provider failure")
         token_frame = json.loads(await asyncio.wait_for(ws.recv(), timeout=2))
         assert token_frame["type"] == "token" and token_frame["text"] == "partial", token_frame
+        diagnostics = json.loads(await asyncio.wait_for(ws.recv(), timeout=2))
+        assert diagnostics["type"] == "capabilities_state", diagnostics
+        assert diagnostics["memory_retrieval"] in ("lexical", "semantic", "recency"), diagnostics
         error = json.loads(await asyncio.wait_for(ws.recv(), timeout=2))
         assert error["type"] == "error" and error["conversation_id"] == cid, error
         assert "provider disconnected" in error["message"], error
@@ -326,7 +329,7 @@ async def check_no_api_key(port: int, token: str) -> None:
         # Reading the first frame blind made this a timing-dependent flake.
         while True:
             frame = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
-            if frame["type"] != "spend_update":
+            if frame["type"] not in ("spend_update", "capabilities_state"):
                 break
         assert frame["type"] == "error", frame
         assert frame["code"] == "no_api_key", frame
@@ -375,16 +378,16 @@ def check_generated_context_never_has_system_authority() -> None:
 
 
 async def check_rehydrate_scoping() -> None:
-    """B3: `_threads_with_open_interrupt` must return exactly the currently
+    """B3: the checkpoint adapter must return exactly the currently
     suspended threads, independent of how many total threads exist (the property
     that keeps connect time flat as thread count grows). Uses a minimal graph on
     an isolated checkpoint DB so it does not depend on driving a real Tier-3
     turn."""
     from typing import TypedDict
 
-    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
     from langgraph.graph import END, START, StateGraph
-    from langgraph.types import Command, interrupt
+    from langgraph.types import interrupt
+    from brain.checkpoints import CheckpointStore
 
     class _S(TypedDict):
         x: int
@@ -397,24 +400,26 @@ async def check_rehydrate_scoping() -> None:
         return {"x": state["x"] + 1}
 
     with tempfile.TemporaryDirectory() as tmp:
-        db = str(Path(tmp) / "cp.db")
-        async with AsyncSqliteSaver.from_conn_string(db) as saver:
-            gi = (lambda g: (g.add_node("n", _suspend), g.add_edge(START, "n"), g.add_edge("n", END), g.compile(checkpointer=saver))[-1])(StateGraph(_S))
-            gp = (lambda g: (g.add_node("n", _plain), g.add_edge(START, "n"), g.add_edge("n", END), g.compile(checkpointer=saver))[-1])(StateGraph(_S))
+        checkpoint_store = await CheckpointStore.open(Path(tmp) / "cp.db")
+        try:
+            gi = (lambda g: (g.add_node("n", _suspend), g.add_edge(START, "n"), g.add_edge("n", END), checkpoint_store.compile(g))[-1])(StateGraph(_S))
+            gp = (lambda g: (g.add_node("n", _plain), g.add_edge(START, "n"), g.add_edge("n", END), checkpoint_store.compile(g))[-1])(StateGraph(_S))
 
             # 25 plain (completed) threads + 3 that suspend at an interrupt.
             for i in range(25):
-                await gp.ainvoke({"x": i}, {"configurable": {"thread_id": f"plain-{i}"}})
+                await gp.ainvoke({"x": i}, checkpoint_store.config(f"plain-{i}"))
             for i in range(3):
-                await gi.ainvoke({"x": i}, {"configurable": {"thread_id": f"intr-{i}"}})
+                await gi.ainvoke({"x": i}, checkpoint_store.config(f"intr-{i}"))
 
-            found = set(await graph._threads_with_open_interrupt(saver))
+            found = set(await checkpoint_store.open_interrupt_threads())
             assert found == {"intr-0", "intr-1", "intr-2"}, f"scoping wrong: {sorted(found)}"
 
             # Resolve one interrupt -> it must drop out of the set.
-            await gi.ainvoke(Command(resume={"decision": "approve"}), {"configurable": {"thread_id": "intr-1"}})
-            after = set(await graph._threads_with_open_interrupt(saver))
+            await checkpoint_store.resume(gi, "intr-1", {"decision": "approve"})
+            after = set(await checkpoint_store.open_interrupt_threads())
             assert after == {"intr-0", "intr-2"}, f"resumed thread not excluded: {sorted(after)}"
+        finally:
+            await checkpoint_store.close()
     print("[check 6] rehydrate scoping: only suspended threads returned, resumed ones excluded, regardless of total: OK")
 
 

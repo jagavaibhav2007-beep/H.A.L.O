@@ -1,6 +1,15 @@
 # Patterns
 _Established code patterns and conventions for this project._
 
+## Checkpoint access stays behind the compatibility adapter - 2026-09-17
+Use `brain/brain/checkpoints.py::CheckpointStore` for saver lifecycle, graph
+compilation, snapshots, updates, resumes, pending-interrupt discovery, and
+retention. `graph.py` must not reach into saver connections or checkpoint SQL.
+The two SQL-dependent operations are isolated in the adapter and guarded by a
+startup schema check so a pinned-upstream drift fails actionably. Keep the
+checkpoint itself as the sole authority for resumable approvals; do not add a
+second persisted pending set that can diverge across a crash.
+
 ## Ignore concrete local artifacts, never security-related words - 2026-08-03
 Use repository-root rules for local agent state (`/.agents/`, `/.claude/`, `/.codex/`) and concrete patterns for credentials, databases/WAL files, session data, caches, test reports, logs, and crash/temp output. Never use a broad rule such as `*secret*`: it hides legitimate new source and tests like `secrets_store.py` or `test_secrets.py`. Keep dependency lockfiles and PyInstaller `.spec` files trackable because reproducible installs and the Phase 3c packaging prototype depend on them. Example: root `.gitignore`.
 
@@ -22,8 +31,8 @@ For the conversation registry, an opened tab is draft UI state, not durable hist
 ## Undo: the inverse is recorded AT EXECUTION TIME, not derived later — 2026-07-21 (Phase 2, D7)
 When a gated action runs, its executor builds `{tool, args, precondition}` for the reversal using the ACTUAL result (not the requested args) — e.g. a `file_move` that collided and got suffixed to `taken (2).txt` records the inverse against the real suffixed path, not the one the caller asked for. This row (`inverse_json` + a fresh `undo_token`) lives on the `action` table row itself. `undo` looks up the token, re-checks the precondition (file still at that path, optionally sha256-identical), atomically consumes the token (a `WHERE consumed=0` UPDATE — the race-losing side of a double-click gets a clean "already undone" error, never a double-run), then executes the inverse through the SAME gate execution tail as a normal Tier-2 action (never re-classified — re-classifying an already-approved reversal could demote or block it). A tool with no inverse builder is `undoable:false` from the start; there is no fallback/best-effort undo path. Reuse this shape (build-the-inverse-from-the-real-result, not from the request) for any future reversible action.
 
-## Checkpoint is the one source of truth for resumable/suspended state — 2026-07-21 (Phase 2, D6/Step 9)
-LangGraph's SqliteSaver (`checkpoints.db`) is never treated as a cache of some other in-memory truth — it IS the truth. `gate._pending`/`_by_conversation` (the approval_id -> conversation_id map) is deliberately in-memory-only and gets fully rebuilt from the checkpoints on every Brain start via `graph.rehydrate_pending()` (a `SELECT DISTINCT thread_id`, then `aget_state` per thread, registering any interrupt whose payload carries an `approval_id`) — nothing about that map is separately persisted, so it can never drift out of sync with what the graph can actually resume. This is idempotent (safe to call on every connect, which two windows do) and is what makes exit-criterion 6 ("kill mid-task -> resume") honest rather than "hope the in-memory map survived." Reuse this shape for any future in-memory routing/lookup table whose source data already lives in a durable store: rebuild it fully from that store at startup rather than trying to persist it separately.
+## Checkpoint is the one source of truth for resumable/suspended state — 2026-07-21, updated 2026-09-18
+LangGraph's `checkpoints.db` is not a cache of separate in-memory truth. `gate._pending`/`_by_conversation` is deliberately in-memory-only and is rebuilt via `graph.rehydrate_pending()`. Candidate discovery and snapshots go through `CheckpointStore`; `open_interrupt_threads()` narrows the scan while snapshot interrupts remain authoritative. Nothing about the routing map is separately persisted, so it cannot drift from what the graph can resume. Reuse this pattern for lookup tables derived from durable state: rebuild through the owning adapter instead of adding a second persistence path.
 
 ## Event IDs, not lengths, are cursors for capped collections - 2026-07-17
 For a fixed-capacity collection such as the 10,000-entry activity ring buffer, capture the newest message `id` as the boundary for a pending operation or "new items" indicator. Find that ID on the next update and inspect only later entries; if it has been evicted, conservatively treat every retained entry as newer. Collection length is not monotonic once old entries are dropped. The pure helper and focused script are `ui/src/activity/activityBoundary.ts` and `activityBoundary.selfcheck.ts`.

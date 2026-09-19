@@ -17,6 +17,12 @@ not respond to mock demo triggers.
 
 ## Automated gates
 
+The dependency-framework branch also requires `scripts/check-locks.ps1`, the
+Python/npm/Cargo advisory gates, and `scripts/generate-sbom.ps1`. CI runs the
+full repository gate on Python 3.11 and 3.12; only the 3.12 lane repeats the
+supply-chain gates and uploads CycloneDX artifacts. An unavailable advisory
+service is a distinct failed verdict, never reported as “no vulnerabilities.”
+
 - [x] Run `./dev.ps1 -Verify` from the repository root. This is the full
       automated gate: IPC contract sync, every Brain and Voice Python test,
       UI self-checks, Vitest, the UI production build, Rust tests, and all
@@ -49,6 +55,33 @@ not respond to mock demo triggers.
 - [x] User manual acceptance on merged `main` (2026-08-10) confirmed the PDF
       folder request produces one connected response, working/progress feedback
       remains visible, and Stop responds and terminates the task correctly.
+
+### Dependency-framework audit evidence (2026-09-17)
+
+- [x] `./verify.ps1 -PythonCommand '.\.venv\Scripts\python.exe'` completed with
+      34 synchronized IPC schemas, every Brain/Voice suite, the supply-chain
+      helper check, five UI self-checks, Vitest 94/94, production build, Rust
+      13/13, and all Phase 0/1/2 protocol gates.
+- [x] The official unsigned packaging route produced `halo-backend.exe` and the
+      NSIS installer. The final backend passed PDF text/page/cancellation and
+      external-command checks, authenticated Brain PDF `file_read`, sanitized
+      read-only Git, Brain auth/restart and Voice reconnect.
+- [x] Locked full-profile native imports passed on Python 3.11 in an isolated
+      environment; the packaged/full development environment uses Python 3.12.
+- [x] Python audit reported no vulnerabilities. npm reported no high-severity
+      vulnerabilities after compatible transitive fixes; two moderate Vitest
+      development-only findings remain because their published fix requires the
+      deferred Vitest 4 major upgrade.
+- [x] Cargo audit reported no vulnerabilities and seven allowed maintenance or
+      unsoundness warnings in transitive crates. Generated Python/npm/Cargo/
+      asset/backend CycloneDX inventories contained no local developer paths or
+      URL credentials and no disallowed license declaration; 84 absent/unknown
+      declarations remain a release-time human review input.
+- [ ] External release acceptance remains: signed-artifact/SmartScreen and
+      antivirus review, clean-machine install/upgrade/uninstall, WebView2/VC
+      runtime behavior, native visual/NVDA checks, and legal resolution of
+      unknown/mismatched third-party metadata. No H.A.L.O. installer was run,
+      and no artifact was signed, published, or distributed during this audit.
 
 ## Render matrix
 

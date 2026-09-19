@@ -5,8 +5,8 @@ fields). Hand-mirrored by ui/src/ipc/contract.ts — keep both in sync; run
 `python shared/check_contract_sync.py` after editing either (it diffs the two
 CONTRACT_SPECs directly). Full contract prose: systemdesign/11-ipc-contract.md
 
-Importable by both `brain` and `voice` (voice installs brain in dev via
-`pip install -e ../brain`; see DEVELOPMENT.md).
+Importable by both `brain` and `voice` from the shared root distribution
+(see DEVELOPMENT.md).
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from typing import Literal
 # envelope/field change; a major mismatch across the WS is refused loudly on
 # both sides. Hand-mirrored with ui/src/ipc/contract.ts CONTRACT_VERSION and
 # shared/ipc-contract.json "version" -- check_contract_sync.py compares them.
-CONTRACT_VERSION = "1.5"
+CONTRACT_VERSION = "1.6"
 
 
 def contract_major(version: object) -> int | None:
@@ -148,6 +148,10 @@ CONTRACT_SPEC: dict = {
             {
                 "voice_input": _field(B), "task_controls": _field(B),
                 "skill_controls": _field(B), "demo_scenarios": _field(B),
+                "docs_pdf": _field(B), "docs_docx": _field(B),
+                "docs_xlsx": _field(B), "docs_html": _field(B),
+                "memory_retrieval": _field(S, ["lexical", "semantic", "recency"]),
+                "semantic_model_ready": _field(B), "semantic_downloads_allowed": _field(B),
             },
         ),
         "belief_state": _message(OUT, ["belief_id", "text", "kind", "provenance", "salience", "status"], {

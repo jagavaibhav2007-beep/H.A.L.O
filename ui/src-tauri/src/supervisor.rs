@@ -8,7 +8,7 @@ use std::process::{Child, Command, Stdio};
 #[cfg(windows)]
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
@@ -175,24 +175,13 @@ fn no_window(cmd: &mut Command) {
 #[cfg(not(windows))]
 fn no_window(_cmd: &mut Command) {}
 
-/// Mirrors `_python.ps1`'s `Resolve-PythonLauncher`: try `python`, then `py -3`,
-/// each with a real *version probe* rather than a PATH-presence check. Presence
-/// is not enough — with no Python installed Windows resolves `python` to the
-/// Store alias, which spawns successfully and exits immediately, so the
-/// supervisor reports a crash loop and the diagnosis points at the wrong thing.
-///
-/// ponytail: the ps1's remaining branches (an explicit launcher override and a
-/// bundled `codex-runtimes` scan) are deliberately not mirrored — both exist for
-/// CI/agent sandboxes, where the native app never runs, and `dev.ps1` itself
-/// calls `Resolve-PythonLauncher` with no override.
-fn probe_python(cmd: &str, prefix: &[&str]) -> bool {
+/// The same dependency/import preflight as PowerShell. Do not cache failures:
+/// a resident supervisor must recover when the user repairs the environment.
+fn probe_python(root: &std::path::Path, cmd: &str, prefix: &[String]) -> bool {
     let mut probe = Command::new(cmd);
     probe
         .args(prefix)
-        .args([
-            "-c",
-            "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)",
-        ])
+        .arg(root.join("shared").join("python_probe.py"))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -200,13 +189,23 @@ fn probe_python(cmd: &str, prefix: &[&str]) -> bool {
     matches!(probe.status(), Ok(status) if status.success())
 }
 
-fn python_launcher() -> Option<(&'static str, &'static [&'static str])> {
-    static LAUNCHER: OnceLock<Option<(&'static str, &'static [&'static str])>> = OnceLock::new();
-    *LAUNCHER.get_or_init(|| {
-        [("python", &[][..]), ("py", &["-3"][..])]
-            .into_iter()
-            .find(|(cmd, prefix)| probe_python(cmd, prefix))
-    })
+fn python_launcher(root: &std::path::Path) -> Result<(String, Vec<String>), String> {
+    if let Ok(command) = std::env::var("HALO_PYTHON") {
+        if !command.is_empty() {
+            let args: Vec<String> = serde_json::from_str(
+                &std::env::var("HALO_PYTHON_ARGUMENTS").unwrap_or_else(|_| "[]".into()),
+            ).map_err(|e| format!("HALO_PYTHON_ARGUMENTS must be a JSON string array: {e}"))?;
+            return if probe_python(root, &command, &args) { Ok((command, args)) } else {
+                Err("HALO_PYTHON override cannot load required packages or Python 3.11+; run shared/python_probe.py with that interpreter and install locked dependencies (DEVELOPMENT.md). No fallback attempted.".into())
+            };
+        }
+    }
+    let local = if cfg!(windows) { ".venv/Scripts/python.exe" } else { ".venv/bin/python" };
+    [(root.join(local).to_string_lossy().into_owned(), vec![]),
+     ("python".into(), vec![]), ("py".into(), vec!["-3".into()])]
+        .into_iter()
+        .find(|(cmd, prefix)| probe_python(root, cmd, prefix))
+        .ok_or_else(|| "No Python 3.11+ with required Halo packages found. Create .venv and install locked dependencies (DEVELOPMENT.md), or set HALO_PYTHON to a prepared interpreter.".into())
 }
 
 /// Repo root, resolved at *runtime* by walking up from the running executable
@@ -231,21 +230,34 @@ fn repo_root() -> Option<PathBuf> {
     None
 }
 
-/// ponytail: runs each sidecar from source (`python -m brain` / `python -m
-/// voice`). Packaging — a PyInstaller step producing a bundled
-/// `resources/sidecars/halo-<module>.exe` plus the branch that would prefer it —
-/// is a Phase-3 concern and isn't written yet; add it back here when that step
-/// exists. `_app` stays in the signature so `supervise`'s `mk_cmd` pointer type
-/// is untouched.
+fn packaged_command(directory: &std::path::Path, module: &'static str) -> Result<Command, String> {
+    let filename = if cfg!(windows) { "halo-backend.exe" } else { "halo-backend" };
+    let executable = directory.join(filename);
+    if !executable.is_file() {
+        return Err("Bundled Halo backend is missing; reinstall the desktop application. No Python fallback attempted.".into());
+    }
+    let mut command = Command::new(executable);
+    command.arg(module).current_dir(directory);
+    Ok(command)
+}
+
+/// Release builds only launch the adjacent externalBin. Source discovery and
+/// interpreter overrides belong to debug builds, never installed applications.
 fn sidecar_cmd(_app: &AppHandle, module: &'static str) -> Result<Command, String> {
-    let (launcher, prefix) = python_launcher().ok_or_else(|| {
-        format!("Python 3.11+ not found (tried `python` and `py -3`); cannot start {module}")
-    })?;
-    let root = repo_root().ok_or_else(|| {
-        format!("could not locate the Halo source tree from {:?}", std::env::current_exe())
-    })?;
-    let mut cmd = Command::new(launcher);
-    cmd.args(prefix).args(["-m", module]).current_dir(root.join(module));
+    let mut cmd = if cfg!(debug_assertions)
+        && std::env::var("HALO_USE_BUNDLED_BACKEND").as_deref() != Ok("1")
+    {
+        let root = repo_root().ok_or_else(|| "Could not locate the Halo source tree".to_string())?;
+        let (launcher, prefix) = python_launcher(&root)?;
+        let mut command = Command::new(launcher);
+        command.args(prefix).args(["-m", module]).current_dir(root.join(module));
+        command
+    } else {
+        let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+        let directory = executable.parent().ok_or("Application directory unavailable")?;
+        packaged_command(directory, module)?
+    };
+    cmd.stdin(Stdio::null());
     // Child stdout/stderr go to a file, not the parent's console: in a release
     // build there is no console to inherit, so this is the only place a sidecar
     // traceback can be read from.
@@ -273,6 +285,34 @@ fn brain_cmd(app: &AppHandle) -> Result<Command, String> {
 
 fn voice_cmd(app: &AppHandle) -> Result<Command, String> {
     sidecar_cmd(app, "voice")
+}
+
+// Suspend before assigning Job Objects so a one-file bootloader cannot spawn
+// an unowned interpreter in the small window between spawn and assignment.
+fn spawn_suspended(cmd: &mut Command) -> std::io::Result<Child> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000 | 0x0000_0004); // NO_WINDOW | SUSPENDED
+    }
+    cmd.spawn()
+}
+
+fn resume_owned(child: &Child) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        #[link(name = "ntdll")]
+        extern "system" {
+            fn NtResumeProcess(handle: HANDLE) -> i32;
+        }
+        let status = unsafe { NtResumeProcess(HANDLE(child.as_raw_handle())) };
+        if status < 0 {
+            return Err(format!("Could not resume owned sidecar: NTSTATUS {status:#x}"));
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = child;
+    Ok(())
 }
 
 /// One rung of the ladder: sleeps and returns true to retry, or emits the
@@ -329,8 +369,20 @@ fn supervise(
                 return;
             }
             emit_state(&app, &statuses, name, "starting");
+            // A generation job also reaps a bootloader's descendants after its
+            // unexpected exit, before another Brain can contend for its lock.
+            let generation_job = match ProcessJob::new() {
+                Ok(job) => job,
+                Err(error) => {
+                    log(&format!("halo: {error}"));
+                    if backoff_or_error(&app, &statuses, name, &mut attempt) {
+                        continue;
+                    }
+                    return;
+                }
+            };
             let spawned = mk_cmd(&app)
-                .and_then(|mut cmd| cmd.spawn().map_err(|e| format!("failed to spawn {name}: {e}")));
+                .and_then(|mut cmd| spawn_suspended(&mut cmd).map_err(|e| format!("failed to spawn {name}: {e}")));
             let mut child = match spawned {
                 Ok(c) => c,
                 Err(e) => {
@@ -341,7 +393,10 @@ fn supervise(
                     return;
                 }
             };
-            if let Err(error) = process_job.assign(&child) {
+            if let Err(error) = process_job.assign(&child)
+                .and_then(|_| generation_job.assign(&child))
+                .and_then(|_| resume_owned(&child))
+            {
                 log(&format!("halo: {error}"));
                 match child.kill() {
                     Ok(()) => {
@@ -399,6 +454,7 @@ fn supervise(
                 thread::sleep(Duration::from_millis(200));
             }
 
+            drop(generation_job); // reap descendants before the restart backoff
             attempt = attempt_after_exit(attempt, start.elapsed());
             if !backoff_or_error(&app, &statuses, name, &mut attempt) {
                 return;
@@ -470,6 +526,53 @@ impl Sidecars {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn packaged_command_is_explicit_and_never_falls_back_to_python() {
+        let dir = std::env::temp_dir().join(format!("Halo packaged café {}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let filename = if cfg!(windows) { "halo-backend.exe" } else { "halo-backend" };
+        let executable = dir.join(filename);
+        std::fs::write(&executable, b"test fixture, not executed").unwrap();
+        let command = packaged_command(&dir, "voice").unwrap();
+        assert_eq!(command.get_program(), executable.as_os_str());
+        assert_eq!(command.get_args().collect::<Vec<_>>(), vec![std::ffi::OsStr::new("voice")]);
+        std::fs::remove_file(&executable).unwrap();
+        assert!(packaged_command(&dir, "brain").unwrap_err().contains("reinstall"));
+        std::fs::remove_dir(&dir).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn suspended_child_runs_only_after_nested_job_ownership() {
+        const FLAG: &str = "HALO_SUSPENDED_TEST_MARKER";
+        if let Some(marker) = std::env::var_os(FLAG) {
+            std::fs::write(marker, b"running").unwrap();
+            thread::sleep(Duration::from_secs(30));
+            return;
+        }
+        let marker = std::env::temp_dir().join(format!("halo-suspend-{}.marker", std::process::id()));
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command.args(["--exact", "supervisor::tests::suspended_child_runs_only_after_nested_job_ownership"])
+            .env(FLAG, &marker);
+        let mut child = spawn_suspended(&mut command).unwrap();
+        let lifetime = ProcessJob::new().unwrap();
+        let generation = ProcessJob::new().unwrap();
+        lifetime.assign(&child).unwrap();
+        generation.assign(&child).unwrap();
+        thread::sleep(Duration::from_millis(100));
+        assert!(!marker.exists(), "child ran before resume");
+        resume_owned(&child).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !marker.exists() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(25));
+        }
+        let started = marker.exists();
+        drop(generation);
+        child.wait().unwrap();
+        assert!(started, "owned child did not resume");
+        std::fs::remove_file(marker).unwrap();
+    }
 
     #[test]
     fn backoff_ladder_is_1s_5s_then_repeats_30s() {

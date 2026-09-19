@@ -156,6 +156,26 @@ export function SettingsView({ sendSettingsUpdate }: SettingsViewProps) {
         <section className="settings-group">
           <h2 className="halo-group-title settings-group-title">Models</h2>
           <div className="settings-row">
+            <span className="settings-label">Last memory retrieval</span>
+            <span className="settings-value">{capabilities.memoryRetrieval
+              ? { lexical: "Lexical (FTS5)", semantic: "Semantic (local model)", recency: "Recent memories (no relevance match)" }[capabilities.memoryRetrieval]
+              : "Not reported by this Brain"}</span>
+          </div>
+          <div className="settings-row">
+            <span className="settings-label">Embedding model</span>
+            <span className="settings-value">{capabilities.semanticModelReady == null
+              ? "Model readiness unknown"
+              : `${capabilities.semanticModelReady ? "Loaded" : "Not loaded"} · ${capabilities.semanticDownloadsAllowed == null
+                ? "model download policy unknown"
+                : `model downloads ${capabilities.semanticDownloadsAllowed ? "allowed" : "disabled"}`}`}</span>
+          </div>
+          <div className="settings-row">
+            <span className="settings-label">Document formats</span>
+            <span className="settings-value">{capabilities.documentFormats
+              ? capabilities.documentFormats.join(", ") || "Plain text only"
+              : "Checking installed formats…"}</span>
+          </div>
+          <div className="settings-row">
             <span className="settings-label">Routing</span>
             <span className="settings-value">Selected automatically by the Brain</span>
           </div>

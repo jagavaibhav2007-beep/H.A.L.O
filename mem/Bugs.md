@@ -1,5 +1,18 @@
 # Bugs
 
+## Windows SBOM generation decoded Cargo metadata with the process code page — 2026-09-17
+**Severity:** Medium release reliability.
+**Symptom:** `scripts/generate-sbom.ps1` failed while parsing `cargo metadata`
+after Python's subprocess reader raised a CP-1252 decode error.
+**Root cause:** `cargo_sbom.py` requested text mode without an encoding, so
+Windows used the active ANSI code page even though Cargo emits UTF-8 JSON.
+**Fix:** decode Cargo metadata explicitly as UTF-8, replace path-bearing Cargo
+package IDs with stable `pkg:cargo/name@version` references, and make the SBOM
+policy reject local paths and URL credentials. `shared/supply_chain_check.py`
+regresses the stable reference and policy guards in the full verifier.
+**Never do:** do not inherit the Windows locale for machine-readable tool output
+whose producer specifies UTF-8, and do not publish raw Cargo path package IDs.
+
 ## One folder request produced one assistant reply per completed task — 2026-08-10
 **Severity:** High UX (user-reported).
 **Symptom:** after Halo ingested a folder of PDFs, chat emitted a separate completion reply as each detached task finished instead of one connected conclusion for the request.

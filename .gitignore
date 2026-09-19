@@ -41,6 +41,7 @@ pnpm-debug.log*
 
 # Rust / Tauri
 target/
+/ui/src-tauri/binaries/*.exe
 *.rs.bk
 
 # Python (Brain / Voice)
@@ -48,6 +49,8 @@ __pycache__/
 *.py[cod]
 *$py.class
 .venv/
+/.audit-core/
+/.audit-full/
 venv/
 env/
 ENV/

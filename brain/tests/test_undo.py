@@ -89,7 +89,7 @@ async def _recv_type(ws, msg_type: str, timeout: float = 10) -> dict:
         frame = await _recv(ws, timeout)
         if frame["type"] == msg_type:
             return frame
-        assert frame["type"] in ("spend_update", "snapshot_complete", "token"), f"unexpected frame waiting for {msg_type}: {frame}"
+        assert frame["type"] in ("spend_update", "snapshot_complete", "token", "capabilities_state"), f"unexpected frame waiting for {msg_type}: {frame}"
 
 
 async def _connect_auth(port: int, token: str, drain_backlog: bool = True):
@@ -186,7 +186,7 @@ async def check_precondition_failure(ws) -> None:
         frame = await _recv(ws)
         if frame["type"] == "done" and frame["conversation_id"] == "u-alive":
             break
-        assert frame["type"] in ("token", "spend_update"), frame
+        assert frame["type"] in ("token", "spend_update", "capabilities_state"), frame
     print("[check 5] precondition failure: recoverable error, no forced overwrite, connection usable: OK")
 
 

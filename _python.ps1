@@ -1,15 +1,17 @@
 # Shared Python 3.11+ launcher resolution, dot-sourced by dev.ps1 and verify.ps1.
 # Keep free of script-specific state so both callers get identical behavior.
+$script:HaloPythonRoot = $PSScriptRoot
 
 function Test-PythonLauncher {
     param(
         [Parameter(Mandatory)]
         [string]$Command,
 
-        [string[]]$PrefixArguments = @()
+        [string[]]$PrefixArguments = @(),
+        [string[]]$RequiredModules = @()
     )
     try {
-        & $Command @PrefixArguments -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)" 2>$null
+        & $Command @PrefixArguments "$script:HaloPythonRoot\shared\python_probe.py" @RequiredModules 2>$null
         return $LASTEXITCODE -eq 0
     } catch {
         return $false
@@ -22,11 +24,22 @@ function Resolve-PythonLauncher {
         [string[]]$PythonArguments = @()
     )
 
+    if (-not $PythonCommand -and $env:HALO_PYTHON) {
+        $PythonCommand = $env:HALO_PYTHON
+        if ($env:HALO_PYTHON_ARGUMENTS) { $PythonArguments = @($env:HALO_PYTHON_ARGUMENTS | ConvertFrom-Json) }
+    }
     if ($PythonCommand) {
         if (-not (Test-PythonLauncher -Command $PythonCommand -PrefixArguments $PythonArguments)) {
-            throw "The supplied Python launcher is unavailable or is older than Python 3.11: $PythonCommand $($PythonArguments -join ' ')"
+            throw "The supplied Python override cannot load Halo's required packages or Python 3.11+: $PythonCommand $($PythonArguments -join ' '). Install the locked dependencies (DEVELOPMENT.md); no fallback was attempted. Run shared/python_probe.py with this interpreter for package details."
         }
         return [pscustomobject]@{ Command = $PythonCommand; Arguments = @($PythonArguments) }
+    }
+
+    foreach ($local in @(".venv\Scripts\python.exe", '.venv/bin/python')) {
+        $localPython = Join-Path $script:HaloPythonRoot $local
+        if ((Test-Path -LiteralPath $localPython) -and (Test-PythonLauncher -Command $localPython)) {
+            return [pscustomobject]@{ Command = $localPython; Arguments = @() }
+        }
     }
 
     $pythonApplication = Get-Command python -CommandType Application -ErrorAction SilentlyContinue |
@@ -58,7 +71,7 @@ function Resolve-PythonLauncher {
         }
     }
 
-    throw "Python 3.11+ was not found. Install 'python', install the 'py' launcher, or run from a Codex environment with a discoverable bundled runtime."
+    throw "No Python 3.11+ interpreter with Halo's required packages was found. Create .venv and install the locked dependencies in DEVELOPMENT.md, or set HALO_PYTHON to a prepared interpreter. Run shared/python_probe.py for package diagnostics."
 }
 
 function Invoke-Python {

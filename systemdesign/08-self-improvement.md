@@ -2,6 +2,8 @@
 
 Halo turns repeated work into tested, reusable skills, and learns from failures.
 
+Status: **planned Phase 3e capability.** The UI/IPC skill-management surface exists, but frequency detection, generation, sandbox evaluation, governed activation, and retirement are not implemented.
+
 ## Skills are files (SKILL.md format)
 - A skill = a folder in `skills/<name>/` containing `SKILL.md` (Anthropic Agent Skills standard: YAML frontmatter with `name` and `description`, markdown body with instructions/steps, optional bundled scripts). The Brain loads active skills into its tool/prompt space. Same format used for Phase 3b browser playbooks — one portable on-disk shape across all generated artifacts.
 

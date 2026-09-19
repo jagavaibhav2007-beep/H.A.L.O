@@ -26,14 +26,14 @@ The expanded window — orb grows into a full glass app (user decision: **left s
 
 ## First-run onboarding (5 steps, ~2 min, skippable)
 1. **Pick your hotkey** (default `Alt+Space`) — try it once.
-2. **Mic + wake word** — mic permission; honest note: "I answer to 'Hey Jarvis' for now; 'Halo' arrives with the custom wake model."
-3. **Keys** — OpenRouter + Deepgram keys → stored in Windows Credential Manager, shown as ●●●.
-4. **Browser (optional, skippable)** — one-time sign-in to the dedicated Halo Chrome profile ([why](../systemdesign/06-browser.md)).
-5. **The 30-second trust tour** — three cards: what runs silently (Tier 1), what I tell you about (Tier 2), what I always ask first (Tier 3 + the browser hard rule).
+2. **Model key** — OpenRouter key → stored in Windows Credential Manager, shown as ●●●.
+3. **The 30-second trust tour** — three cards: what runs silently (Tier 1), what I tell you about (Tier 2), what I always ask first (Tier 3).
+4. **Optional capabilities** — show Voice, browser, and integrations only when installed; unavailable capabilities explain what is planned and never request dead credentials or permissions.
+5. **Ready check** — send a text message and show the connection/activity path working.
 
 ## Settings (single scrollable view, grouped)
 - **General:** hotkey, theme (light/dark/auto), launch at startup.
-- **Voice:** mic device, wake word on/off, narration on/off, voice-approval toggle (see [05-permissions-trust](05-permissions-trust.md)).
+- **Voice (when installed):** mic device, wake word on/off, narration on/off, voice-approval toggle (see [05-permissions-trust](05-permissions-trust.md)); otherwise one honest unavailable/install-later state.
 - **Models:** current light/heavy IDs (editable, from [techstack/00](../techstack/00-stack-summary.md)) + this month's estimated spend.
-- **Keys & connections:** OpenRouter, Deepgram, Chrome profile, MCP servers — status dots + re-auth buttons.
+- **Keys & connections:** OpenRouter today; capability-scoped speech, browser, and MCP credentials appear only when those capabilities exist — status dots + re-auth buttons.
 - **Advanced (collapsed):** memory decay knobs, skill thresholds — the tunables from systemdesign, each with its default shown.

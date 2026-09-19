@@ -31,9 +31,8 @@ Reuses assertion logic from brain/tests/test_server.py and
 voice/tests/test_client.py rather than re-implementing it -- only criterion
 2's kill-and-respawn-on-a-new-port sequence is new.
 
-Requires `brain` importable, and for criterion 4, `voice` with
-`pip install -e ../brain` done in voice's environment (same prerequisite as
-voice/tests/test_client.py -- see DEVELOPMENT.md).
+Requires the shared root distribution, providing both `brain` and `voice`
+(same prerequisite as voice/tests/test_client.py -- see DEVELOPMENT.md).
 
 Run with:
     python shared/smoke_test.py

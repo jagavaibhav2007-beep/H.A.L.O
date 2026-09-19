@@ -32,6 +32,7 @@ os.environ["HALO_KEYRING_DIR"] = str(Path(_TMP) / "keys")
 import websockets
 
 from brain import gate, graph, store
+from brain.ipc.contract import parse_ipc_message
 from brain.server import start
 
 EXECUTED: list[tuple[str, dict]] = []
@@ -112,12 +113,13 @@ async def _recv(ws, timeout: float = 10) -> dict:
 
 
 async def _recv_type(ws, msg_type: str, timeout: float = 10) -> dict:
-    """Next frame of msg_type, skipping spend_update noise."""
+    """Next frame of msg_type, allowing contract-valid global diagnostics."""
     while True:
         frame = await _recv(ws, timeout)
         if frame["type"] == msg_type:
             return frame
-        assert frame["type"] == "spend_update", f"unexpected frame waiting for {msg_type}: {frame}"
+        parse_ipc_message(frame)
+        assert frame["type"] in ("spend_update", "capabilities_state"), f"unexpected frame waiting for {msg_type}: {frame}"
 
 
 async def _respond(ws, approval_id: str, decision: str, edited_args: dict | None = None) -> None:
@@ -360,7 +362,7 @@ async def check_tier3_approve_and_lock(port: int, token: str) -> None:
             frame = await _recv(ws)
             if frame["type"] == "done" and frame["conversation_id"] == "gate-other":
                 break
-            assert frame["type"] in ("token", "spend_update"), frame
+            assert frame["type"] in ("token", "spend_update", "capabilities_state"), frame
 
         await _respond(ws, req["approval_id"], "approve")
         act = await _recv_type(ws, "activity")  # confirming activity for the approved run

@@ -4,20 +4,20 @@ Status: **implemented in the Phase 2 exit-hardening tranche.** `dir_organize`,
 `doc_digest`, `command_run`, and `script_run` are task-shaped tools; every Phase 3 sub-phase
 (3a–3e) inherits this runtime.
 
-## Problem
+## Why this runtime exists
 
-Before exit hardening, Phase 2 had exactly one unit of execution: the interactive chat turn. A long-running tool therefore:
+Long-running work cannot share the interactive chat turn's execution budget. Without a separate task runtime it would:
 
 - holds one of the 4 global turn slots (`_REAL_TURN_CONCURRENCY`, `server.py`) and the per-conversation lock for its full wall-clock time — four long tasks hang every new conversation in the app;
 - cannot be cancelled mid-tool (`stop` is only checked between LLM stream deltas), violating the ≤ ~2 s halt rule in [11-ipc-contract.md](11-ipc-contract.md);
-- answered `task_op` with `operation_unsupported`;
-- has no channel for streamed output (coding-agent stdout has nowhere to go but `activity`).
+- leave `task_op` unable to control active work; and
+- have no bounded channel for streamed command or worker output.
 
 ## Design: two execution currencies
 
 **Interactive turns** stay exactly as they are: short, serialized per conversation, bounded by the turn semaphore.
 
-**Tasks** are a separate pool. A *task-shaped* tool (declared as such in the tool registry — coding-agent run, browser playbook, `dir_organize`, future GUI actions) does not execute inline in the turn. Instead the gate:
+**Tasks** are a separate pool. A *task-shaped* tool (declared as such in the tool registry — managed command/script run, document digest, directory organization, and future browser/GUI work) does not execute inline in the turn. Instead the gate:
 
 1. Runs the normal permission/tier check (unchanged — the gate stays the single choke point).
 2. Records the **intent** row in the activity log (tool, args, `task_id`) *before* any side effect — this is the reconciliation anchor from 11-ipc-contract.md §Cancellation.
