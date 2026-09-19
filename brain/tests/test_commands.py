@@ -738,9 +738,12 @@ async def check_websocket_approval_to_verified_artifact() -> None:
         task_id = None
         while True:
             event = json.loads(await asyncio.wait_for(ws.recv(), task_completion_timeout))
-            if event["type"] == "task_state" and event["state"] == "done":
-                task_id = event["task_id"]
-                break
+            if event["type"] == "task_state":
+                if event["state"] in {"failed", "stopped"}:
+                    raise AssertionError(f"script task ended as {event['state']}: {event.get('reason')}")
+                if event["state"] == "done":
+                    task_id = event["task_id"]
+                    break
         task = store.get_task(task_id)
         assert task and json.loads(task["result_json"])["artifacts"][0]["status"] == "valid"
         assert source not in task["args_json"] and target.read_bytes().startswith(b"%PDF-")
@@ -765,11 +768,14 @@ async def check_websocket_approval_to_verified_artifact() -> None:
                 break
         while True:
             event = json.loads(await asyncio.wait_for(ws.recv(), task_completion_timeout))
-            if event["type"] == "task_state" and event["state"] == "done":
-                outside_task = store.get_task(event["task_id"])
-                if outside_task and outside_task["conversation_id"] == outside_cid:
-                    assert json.loads(outside_task["result_json"])["exit_code"] == 0
-                    break
+            if event["type"] == "task_state":
+                if event["state"] in {"failed", "stopped"}:
+                    raise AssertionError(f"outside-root task ended as {event['state']}: {event.get('reason')}")
+                if event["state"] == "done":
+                    outside_task = store.get_task(event["task_id"])
+                    if outside_task and outside_task["conversation_id"] == outside_cid:
+                        assert json.loads(outside_task["result_json"])["exit_code"] == 0
+                        break
     finally:
         await ws.close()
         managed.close()
